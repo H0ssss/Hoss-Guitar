@@ -30,6 +30,7 @@ file.onchange = () =>
     }
 };
 
+
 ["dragenter", "dragover"].forEach(eventName =>
 {
     drop.addEventListener(eventName, event =>
@@ -39,6 +40,7 @@ file.onchange = () =>
     });
 });
 
+
 ["dragleave", "drop"].forEach(eventName =>
 {
     drop.addEventListener(eventName, event =>
@@ -47,6 +49,7 @@ file.onchange = () =>
         drop.classList.remove("drag");
     });
 });
+
 
 drop.ondrop = event =>
 {
@@ -61,20 +64,21 @@ drop.ondrop = event =>
    LOAD MIDI
 ========================= */
 
-async function load(file)
+async function load(selectedFile)
 {
     try
     {
-        midi = parseMidi(
+        const bytes =
             new Uint8Array(
-                await file.arrayBuffer()
-            )
-        );
+                await selectedFile.arrayBuffer()
+            );
 
-        filename = file.name;
+        midi = parseMidi(bytes);
+
+        filename = selectedFile.name;
 
         info.textContent =
-            `${file.name} • ${midi.tracks.length} tracks • ${midi.tpb} ticks/beat`;
+            `${filename} • ${midi.tracks.length} tracks • ${midi.tpb} ticks/beat`;
 
         track.innerHTML = "";
 
@@ -93,29 +97,42 @@ async function load(file)
             track.appendChild(option);
         });
 
+
+        /*
+            Automatically select a useful
+            musical track when possible.
+        */
+
         const preferred =
             midi.tracks.findIndex(t =>
                 /violin|melody|flute|lead|voice|guitar|piano|strings/i
                     .test(t.name)
             );
 
+
         track.value =
             String(
-                preferred < 0
-                    ? 0
-                    : preferred
+                preferred >= 0
+                    ? preferred
+                    : 0
             );
 
+
         tracks.classList.remove("hidden");
+
         result.classList.add("hidden");
     }
     catch (error)
     {
+        console.error(error);
+
         info.textContent =
             "Could not read MIDI: " +
             error.message;
 
         tracks.classList.add("hidden");
+
+        result.classList.add("hidden");
     }
 }
 
@@ -126,10 +143,17 @@ async function load(file)
 
 convert.onclick = () =>
 {
+    if (!midi)
+    {
+        return;
+    }
+
+
     const selectedTrack =
         midi.tracks[
             Number(track.value)
         ];
+
 
     const song =
         build(
@@ -138,25 +162,31 @@ convert.onclick = () =>
             midi.tpb
         );
 
+
     $("title").textContent =
         filename.replace(
             /\.(mid|midi)$/i,
             ""
         );
 
+
     $("sTrack").textContent =
         selectedTrack.name ||
         "Untitled";
 
+
     $("sEvents").textContent =
         song.events.length;
+
 
     $("sNotes").textContent =
         song.count;
 
+
     $("sTempo").textContent =
         song.bpm.toFixed(1) +
         " BPM";
+
 
     $("sDuration").textContent =
         formatDuration(song.length);
@@ -182,11 +212,13 @@ convert.onclick = () =>
             .add("hidden");
     }
 
+
     output.value =
         createNotecard(
             song,
             filename
         );
+
 
     status.textContent = "";
 
@@ -195,7 +227,7 @@ convert.onclick = () =>
 
 
 /* =========================
-   COPY SONG
+   COPY
 ========================= */
 
 copy.onclick = async () =>
@@ -212,11 +244,14 @@ copy.onclick = async () =>
         document.execCommand("copy");
     }
 
+
     status.textContent =
         "✓ Copied. Paste it into a Second Life notecard.";
 
+
     copy.textContent =
         "Copied!";
+
 
     setTimeout(() =>
     {
@@ -230,12 +265,17 @@ copy.onclick = async () =>
    BUILD SONG
 ========================= */
 
-function build(track, tempoMap, ticksPerBeat)
+function build(
+    selectedTrack,
+    tempoMap,
+    ticksPerBeat
+)
 {
     const good = [];
     const bad = [];
 
-    for (const note of track.notes)
+
+    for (const note of selectedTrack.notes)
     {
         const start =
             ticksToSeconds(
@@ -244,12 +284,14 @@ function build(track, tempoMap, ticksPerBeat)
                 ticksPerBeat
             );
 
+
         const end =
             ticksToSeconds(
                 note.end,
                 tempoMap,
                 ticksPerBeat
             );
+
 
         if (
             note.num < low ||
@@ -271,10 +313,14 @@ function build(track, tempoMap, ticksPerBeat)
 
 
     /*
-        Group simultaneous notes.
+        Group notes which start together.
+        This creates chords such as:
+
+        C4+E4+G4
     */
 
     const groups = new Map();
+
 
     for (const note of good)
     {
@@ -283,6 +329,7 @@ function build(track, tempoMap, ticksPerBeat)
                 note.start * 1000000
             );
 
+
         if (!groups.has(key))
         {
             groups.set(
@@ -290,6 +337,7 @@ function build(track, tempoMap, ticksPerBeat)
                 []
             );
         }
+
 
         groups
             .get(key)
@@ -336,13 +384,14 @@ function build(track, tempoMap, ticksPerBeat)
 
 
     /*
-        IMPORTANT:
-        Start the song at the first
-        actual musical note.
+        Remove silence before the first
+        musical note.
+
+        First event becomes 0ms.
     */
 
     const firstTime =
-        rawEvents.length > 0
+        rawEvents.length
             ? rawEvents[0].start
             : 0;
 
@@ -372,33 +421,26 @@ function build(track, tempoMap, ticksPerBeat)
 
         bad: bad,
 
-        /*
-            The tempo map is now guaranteed
-            to contain the REAL MIDI tempo
-            at tick 0.
-        */
-
         bpm:
-            tempoMap.length > 0
+            tempoMap.length
                 ? tempoMap[0].bpm
                 : 120,
 
         length:
-            events.length > 0
+            events.length
                 ? events[
                     events.length - 1
-                ].start +
+                  ].start +
                   events[
                     events.length - 1
-                ].duration
+                  ].duration
                 : 0
     };
 }
 
 
 /* =========================
-   CREATE SECOND LIFE
-   NOTECARD
+   CREATE NOTECARD
 ========================= */
 
 function createNotecard(song, filename)
@@ -408,6 +450,7 @@ function createNotecard(song, filename)
             /\.(mid|midi)$/i,
             ""
         );
+
 
     const lines =
     [
@@ -420,6 +463,7 @@ function createNotecard(song, filename)
         "# FORMAT: time_ms|notes"
     ];
 
+
     for (const event of song.events)
     {
         const time =
@@ -427,13 +471,16 @@ function createNotecard(song, filename)
                 event.start * 1000
             );
 
+
         const notes =
             event.notes.join("+");
+
 
         lines.push(
             `${time}|${notes}`
         );
     }
+
 
     return lines.join("\n");
 }
@@ -456,22 +503,15 @@ function ticksToSeconds(
     {
         return (
             tick *
-            (
-                500000 /
-                1000000
-            ) /
+            0.5 /
             ticksPerBeat
         );
     }
 
 
-    /*
-        Find the tempo segment
-        containing this tick.
-    */
-
     let current =
         tempoMap[0];
+
 
     for (
         let i = 1;
@@ -486,6 +526,7 @@ function ticksToSeconds(
         {
             break;
         }
+
 
         current =
             tempoMap[i];
@@ -548,6 +589,7 @@ function parseMidi(bytes)
 
             bytes[position + 3];
 
+
         position += 4;
 
         return value >>> 0;
@@ -557,6 +599,7 @@ function parseMidi(bytes)
     function readString(length)
     {
         let value = "";
+
 
         for (
             let i = 0;
@@ -570,6 +613,7 @@ function parseMidi(bytes)
                 );
         }
 
+
         return value;
     }
 
@@ -579,9 +623,11 @@ function parseMidi(bytes)
         let value = 0;
         let byte;
 
+
         do
         {
             byte = read8();
+
 
             value =
                 (value << 7) |
@@ -589,9 +635,14 @@ function parseMidi(bytes)
         }
         while (byte & 128);
 
+
         return value;
     }
 
+
+    /*
+        Header
+    */
 
     if (
         readString(4) !==
@@ -607,11 +658,14 @@ function parseMidi(bytes)
     const headerLength =
         read32();
 
+
     const format =
         read16();
 
+
     const trackCount =
         read16();
+
 
     const ticksPerBeat =
         read16();
@@ -628,19 +682,11 @@ function parseMidi(bytes)
 
 
     /*
-        Default MIDI tempo.
-
-        This is only used when the MIDI
-        does not provide a tempo event.
+        We keep the default 120 BPM
+        only as a fallback.
     */
 
-    const tempoEvents =
-    [
-        {
-            tick: 0,
-            tempo: 500000
-        }
-    ];
+    const tempoEvents = [];
 
 
     /* =========================
@@ -667,14 +713,18 @@ function parseMidi(bytes)
         const trackLength =
             read32();
 
+
         const trackEnd =
             position +
             trackLength;
 
 
         let absoluteTick = 0;
+
         let runningStatus = 0;
+
         let trackName = "";
+
 
         const notes = [];
 
@@ -715,9 +765,9 @@ function parseMidi(bytes)
             }
 
 
-            /* =========================
-               META EVENTS
-            ========================= */
+            /*
+                Meta event
+            */
 
             if (
                 status === 255
@@ -725,6 +775,7 @@ function parseMidi(bytes)
             {
                 const metaType =
                     read8();
+
 
                 const length =
                     readVLQ();
@@ -750,11 +801,11 @@ function parseMidi(bytes)
 
 
                 /*
-                    Tempo
+                    TEMPO EVENT
 
-                    This is the important part:
-                    we keep tempo events that
-                    occur at tick 0.
+                    0x51 = Set Tempo
+                    3 bytes = microseconds
+                    per quarter note
                 */
 
                 if (
@@ -786,13 +837,14 @@ function parseMidi(bytes)
                 position +=
                     length;
 
+
                 continue;
             }
 
 
-            /* =========================
-               SYSEX
-            ========================= */
+            /*
+                SysEx
+            */
 
             if (
                 status === 240 ||
@@ -802,8 +854,10 @@ function parseMidi(bytes)
                 const length =
                     readVLQ();
 
+
                 position +=
                     length;
+
 
                 continue;
             }
@@ -812,13 +866,14 @@ function parseMidi(bytes)
             const eventType =
                 status & 240;
 
+
             const channel =
                 status & 15;
 
 
-            /* =========================
-               NOTE ON / OFF
-            ========================= */
+            /*
+                NOTE ON / NOTE OFF
+            */
 
             if (
                 eventType === 128 ||
@@ -827,6 +882,7 @@ function parseMidi(bytes)
             {
                 const noteNumber =
                     read8();
+
 
                 const velocity =
                     read8();
@@ -862,7 +918,6 @@ function parseMidi(bytes)
 
                 /*
                     NOTE OFF
-                    OR NOTE ON velocity 0
                 */
 
                 else if (
@@ -934,7 +989,8 @@ function parseMidi(bytes)
             else
             {
                 throw new Error(
-                    "Unsupported MIDI event"
+                    "Unsupported MIDI event: 0x" +
+                    status.toString(16)
                 );
             }
         }
@@ -956,8 +1012,29 @@ function parseMidi(bytes)
 
 
     /* =========================
-       TEMPO MAP
+       TEMPO
     ========================= */
+
+    /*
+        If there were no tempo events,
+        use MIDI's standard 120 BPM.
+    */
+
+    if (
+        tempoEvents.length === 0
+    )
+    {
+        tempoEvents.push(
+        {
+            tick: 0,
+            tempo: 500000
+        });
+    }
+
+
+    /*
+        Sort by tick.
+    */
 
     tempoEvents.sort(
         (a, b) =>
@@ -967,22 +1044,12 @@ function parseMidi(bytes)
 
 
     /*
-        MIDI files can contain:
-
-        default tempo = 120 BPM
-
-        followed immediately by:
-
-        actual tempo = 84 BPM
-
-        both at tick 0.
-
-        We want the LAST tempo at the
-        same tick, not the default.
+        If multiple tempo events occur
+        at the same tick, the LAST one
+        is the effective tempo.
     */
 
-    const normalizedTempoEvents =
-        [];
+    const effectiveTempos = [];
 
 
     for (
@@ -990,20 +1057,20 @@ function parseMidi(bytes)
     )
     {
         if (
-            normalizedTempoEvents.length > 0 &&
-            normalizedTempoEvents[
-                normalizedTempoEvents.length - 1
+            effectiveTempos.length &&
+            effectiveTempos[
+                effectiveTempos.length - 1
             ].tick === event.tick
         )
         {
-            normalizedTempoEvents[
-                normalizedTempoEvents.length - 1
+            effectiveTempos[
+                effectiveTempos.length - 1
             ].tempo =
                 event.tempo;
         }
         else
         {
-            normalizedTempoEvents.push(
+            effectiveTempos.push(
             {
                 tick:
                     event.tick,
@@ -1016,16 +1083,15 @@ function parseMidi(bytes)
 
 
     /*
-        Make sure there is always
-        a tempo at tick 0.
+        If the first actual tempo is after
+        tick 0, use 120 BPM until it.
     */
 
     if (
-        normalizedTempoEvents.length === 0 ||
-        normalizedTempoEvents[0].tick !== 0
+        effectiveTempos[0].tick > 0
     )
     {
-        normalizedTempoEvents.unshift(
+        effectiveTempos.unshift(
         {
             tick: 0,
             tempo: 500000
@@ -1034,27 +1100,22 @@ function parseMidi(bytes)
 
 
     /*
-        Build absolute-time tempo map.
+        Build absolute tempo map.
     */
 
     const tempoMap = [];
 
 
     let lastTick =
-        normalizedTempoEvents[0].tick;
+        effectiveTempos[0].tick;
 
 
-    let lastSeconds = 0;
+    let lastSec = 0;
 
 
     let lastTempo =
-        normalizedTempoEvents[0].tempo;
+        effectiveTempos[0].tempo;
 
-
-    /*
-        First tempo is the REAL tempo
-        at tick 0.
-    */
 
     tempoMap.push(
     {
@@ -1073,21 +1134,17 @@ function parseMidi(bytes)
     });
 
 
-    /*
-        Add later tempo changes.
-    */
-
     for (
         let i = 1;
-        i < normalizedTempoEvents.length;
+        i < effectiveTempos.length;
         i++
     )
     {
         const event =
-            normalizedTempoEvents[i];
+            effectiveTempos[i];
 
 
-        lastSeconds +=
+        lastSec +=
             (
                 event.tick -
                 lastTick
@@ -1113,7 +1170,7 @@ function parseMidi(bytes)
                 lastTick,
 
             sec:
-                lastSeconds,
+                lastSec,
 
             tempo:
                 lastTempo,
@@ -1142,7 +1199,7 @@ function parseMidi(bytes)
 
 
 /* =========================
-   NOTE CONVERSION
+   MIDI NOTE NUMBER
 ========================= */
 
 function midiNumber(note)
@@ -1162,7 +1219,7 @@ function midiNumber(note)
     }
 
 
-    const noteValues =
+    const values =
     {
         C: 0,
         "C#": 1,
@@ -1186,12 +1243,16 @@ function midiNumber(note)
         ) *
         12
         +
-        noteValues[
+        values[
             match[1]
         ]
     );
 }
 
+
+/* =========================
+   MIDI NUMBER → NOTE
+========================= */
 
 function midiName(number)
 {
@@ -1241,7 +1302,7 @@ function formatDuration(seconds)
         );
 
 
-    const remainingSeconds =
+    const remaining =
         seconds % 60;
 
 
@@ -1249,7 +1310,10 @@ function formatDuration(seconds)
         minutes +
         ":" +
         String(
-            remainingSeconds
-        ).padStart(2, "0")
+            remaining
+        ).padStart(
+            2,
+            "0"
+        )
     );
 }
