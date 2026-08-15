@@ -11,11 +11,233 @@ const output = $("output");
 const copy = $("copy");
 const status = $("status");
 
-const low = midiNumber("E1");
-const high = midiNumber("A#4");
+/*
+    =========================
+    GUITAR PROFILES
+    =========================
+
+    Serenelle is the current available guitar.
+
+    Future guitars can be added here without
+    changing the MIDI conversion system.
+*/
+
+const guitars = [
+    {
+        id: "serenelle",
+        name: "Serenelle",
+        type: "12-String Guitar",
+        low: midiNumber("E1"),
+        high: midiNumber("A#4"),
+        available: true
+    },
+
+    {
+        id: "coming-soon-1",
+        name: "Coming Soon",
+        type: "New Guitar",
+        available: false
+    },
+
+    {
+        id: "coming-soon-2",
+        name: "Coming Soon",
+        type: "New Guitar",
+        available: false
+    }
+];
+
+let currentGuitar = guitars[0];
 
 let midi = null;
 let filename = "";
+
+
+/* =========================
+   GUITAR PICKER
+========================= */
+
+function createGuitarPicker()
+{
+    if (document.getElementById("guitar-picker"))
+    {
+        return;
+    }
+
+    const wrapper =
+        document.createElement("div");
+
+    wrapper.id =
+        "guitar-picker";
+
+    wrapper.innerHTML = `
+        <div style="
+            margin: 0 0 18px 0;
+        ">
+            <div style="
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 1.2px;
+                text-transform: uppercase;
+                opacity: .65;
+                margin-bottom: 10px;
+            ">
+                Choose your guitar
+            </div>
+
+            <div id="guitar-options" style="
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+            "></div>
+
+            <div id="guitar-description" style="
+                margin-top: 9px;
+                font-size: 12px;
+                opacity: .65;
+            "></div>
+        </div>
+    `;
+
+    /*
+        Put the picker above the MIDI track selector.
+    */
+
+    tracks.parentNode.insertBefore(
+        wrapper,
+        tracks
+    );
+
+    const options =
+        document.getElementById(
+            "guitar-options"
+        );
+
+    guitars.forEach(guitar =>
+    {
+        const button =
+            document.createElement("button");
+
+        button.type =
+            "button";
+
+        button.dataset.guitar =
+            guitar.id;
+
+        button.style.cssText = `
+            position: relative;
+            border: 1px solid rgba(255,255,255,.14);
+            border-radius: 12px;
+            padding: 11px 15px;
+            background: rgba(255,255,255,.05);
+            color: inherit;
+            font: inherit;
+            cursor: pointer;
+            transition: .18s ease;
+        `;
+
+        if (guitar.available)
+        {
+            button.innerHTML =
+                `🎸 <strong>${guitar.name}</strong>`;
+
+            button.title =
+                guitar.type;
+
+            button.onclick = () =>
+            {
+                selectGuitar(
+                    guitar.id
+                );
+            };
+        }
+        else
+        {
+            button.innerHTML =
+                `<strong>${guitar.name}</strong>`;
+
+            button.disabled =
+                true;
+
+            button.style.opacity =
+                ".42";
+
+            button.style.cursor =
+                "not-allowed";
+
+            button.title =
+                "This guitar is coming soon";
+        }
+
+        options.appendChild(
+            button
+        );
+    });
+
+    selectGuitar(
+        currentGuitar.id
+    );
+}
+
+
+function selectGuitar(id)
+{
+    const guitar =
+        guitars.find(
+            item =>
+                item.id === id &&
+                item.available
+        );
+
+    if (!guitar)
+    {
+        return;
+    }
+
+    currentGuitar =
+        guitar;
+
+    const buttons =
+        document.querySelectorAll(
+            "#guitar-options button"
+        );
+
+    buttons.forEach(button =>
+    {
+        const active =
+            button.dataset.guitar ===
+            guitar.id;
+
+        button.style.background =
+            active
+                ? "rgba(255,255,255,.14)"
+                : "rgba(255,255,255,.05)";
+
+        button.style.borderColor =
+            active
+                ? "rgba(255,255,255,.38)"
+                : "rgba(255,255,255,.14)";
+
+        button.style.transform =
+            active
+                ? "translateY(-1px)"
+                : "none";
+    });
+
+    const description =
+        document.getElementById(
+            "guitar-description"
+        );
+
+    if (description)
+    {
+        description.textContent =
+            `${guitar.name} • ${guitar.type}`;
+    }
+}
+
+
+createGuitarPicker();
 
 
 /* =========================
@@ -237,7 +459,7 @@ convert.onclick = () =>
 
 
         $("warning").textContent =
-            `${song.bad.length} note(s) outside E1–A#4 were skipped: ${
+            `${song.bad.length} note(s) outside ${currentGuitar.low}–${currentGuitar.high} were skipped: ${
                 uniqueBad.join(", ")
             }`;
 
@@ -352,12 +574,12 @@ function build(
 
         let fittedNum = note.num;
 
-        while (fittedNum > high)
+        while (fittedNum > currentGuitar.high)
         {
             fittedNum -= 12;
         }
 
-        while (fittedNum < low)
+        while (fittedNum < currentGuitar.low)
         {
             fittedNum += 12;
         }
@@ -542,6 +764,9 @@ function createNotecard(
 
         "# BPM=" +
         song.bpm.toFixed(3),
+
+        "# GUITAR=" +
+        currentGuitar.name,
 
         "# FORMAT: time_ms|notes"
     ];
