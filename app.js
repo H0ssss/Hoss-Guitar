@@ -49,6 +49,13 @@ const guitars = [
 
 let currentGuitar = guitars[0];
 
+/*
+    Pitch shift in semitones.
+    Negative values make the guitar deeper.
+    Example: -2 = two semitones lower.
+*/
+let pitchShift = 0;
+
 let midi = null;
 let filename = "";
 
@@ -96,6 +103,55 @@ function createGuitarPicker()
                 font-size: 12px;
                 opacity: .65;
             "></div>
+
+            <div style="
+                margin-top: 16px;
+            ">
+                <div style="
+                    font-size: 12px;
+                    font-weight: 700;
+                    letter-spacing: 1.2px;
+                    text-transform: uppercase;
+                    opacity: .65;
+                    margin-bottom: 10px;
+                ">
+                    Pitch shift
+                </div>
+
+                <select id="pitch-shift" style="
+                    width: 100%;
+                    max-width: 320px;
+                    border: 1px solid rgba(255,255,255,.14);
+                    border-radius: 12px;
+                    padding: 11px 13px;
+                    background: rgba(255,255,255,.05);
+                    color: inherit;
+                    font: inherit;
+                    cursor: pointer;
+                ">
+                    <option value="-6">-6 semitones</option>
+                    <option value="-5">-5 semitones</option>
+                    <option value="-4">-4 semitones</option>
+                    <option value="-3">-3 semitones</option>
+                    <option value="-2">-2 semitones</option>
+                    <option value="-1">-1 semitone</option>
+                    <option value="0" selected>Original pitch</option>
+                    <option value="1">+1 semitone</option>
+                    <option value="2">+2 semitones</option>
+                    <option value="3">+3 semitones</option>
+                    <option value="4">+4 semitones</option>
+                    <option value="5">+5 semitones</option>
+                    <option value="6">+6 semitones</option>
+                </select>
+
+                <div style="
+                    margin-top: 7px;
+                    font-size: 12px;
+                    opacity: .55;
+                ">
+                    Negative values make the guitar deeper.
+                </div>
+            </div>
         </div>
     `;
 
@@ -238,6 +294,30 @@ function selectGuitar(id)
 
 
 createGuitarPicker();
+
+
+/* =========================
+   PITCH SHIFT
+========================= */
+
+const pitchShiftControl =
+    document.getElementById(
+        "pitch-shift"
+    );
+
+if (pitchShiftControl)
+{
+    pitchShiftControl.value =
+        String(pitchShift);
+
+    pitchShiftControl.onchange = () =>
+    {
+        pitchShift =
+            Number(
+                pitchShiftControl.value
+            );
+    };
+}
 
 
 /* =========================
@@ -572,7 +652,21 @@ function build(
                 G5  -> G4
         */
 
-        let fittedNum = note.num;
+        /*
+            Apply the user's pitch shift first.
+
+            Example:
+                -2 semitones:
+                C4 -> A#3
+                A3 -> G3
+
+            After shifting, fit the result into
+            the selected guitar's playable range.
+        */
+
+        let fittedNum =
+            note.num +
+            pitchShift;
 
         while (fittedNum > currentGuitar.high)
         {
