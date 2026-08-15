@@ -1,99 +1,1257 @@
-const $=id=>document.getElementById(id);
-const file=$("file"),drop=$("drop"),info=$("info"),tracks=$("tracks"),track=$("track");
-const convert=$("convert"),result=$("result"),output=$("output"),copy=$("copy"),status=$("status");
-const low=midiNumber("E1"), high=midiNumber("A#4");
-let midi=null,filename="";
+const $ = id => document.getElementById(id);
 
-file.onchange=()=>file.files[0]&&load(file.files[0]);
-["dragenter","dragover"].forEach(x=>drop.addEventListener(x,e=>{e.preventDefault();drop.classList.add("drag")}));
-["dragleave","drop"].forEach(x=>drop.addEventListener(x,e=>{e.preventDefault();drop.classList.remove("drag")}));
-drop.ondrop=e=>e.dataTransfer.files[0]&&load(e.dataTransfer.files[0]);
+const file = $("file");
+const drop = $("drop");
+const info = $("info");
+const tracks = $("tracks");
+const track = $("track");
+const convert = $("convert");
+const result = $("result");
+const output = $("output");
+const copy = $("copy");
+const status = $("status");
 
-async function load(f){
- try{
-  midi=parseMidi(new Uint8Array(await f.arrayBuffer())); filename=f.name;
-  info.textContent=`${f.name} • ${midi.tracks.length} tracks • ${midi.tpb} ticks/beat`;
-  track.innerHTML="";
-  midi.tracks.forEach((t,i)=>{
-   const o=document.createElement("option");o.value=i;
-   o.textContent=`${i+1}. ${t.name||"Untitled track"} (${t.notes.length} notes)`;
-   track.appendChild(o);
-  });
-  const preferred=midi.tracks.findIndex(t=>/violin|melody|flute|lead|voice|guitar|piano/i.test(t.name));
-  track.value=String(preferred<0?0:preferred);tracks.classList.remove("hidden");result.classList.add("hidden");
- }catch(e){info.textContent="Could not read MIDI: "+e.message;tracks.classList.add("hidden")}
-}
+const low = midiNumber("E1");
+const high = midiNumber("A#4");
 
-convert.onclick=()=>{
- const t=midi.tracks[+track.value],song=build(t,midi.tempo,midi.tpb);
- $("title").textContent=filename.replace(/\.(mid|midi)$/i,"");
- $("sTrack").textContent=t.name||"Untitled";$("sEvents").textContent=song.events.length;
- $("sNotes").textContent=song.count;$("sTempo").textContent=song.bpm.toFixed(1)+" BPM";
- $("sDuration").textContent=duration(song.length);
- if(song.bad.length){
-  $("warning").textContent=`${song.bad.length} note(s) outside E1–A#4: ${[...new Set(song.bad.map(midiName))].join(", ")}. They are skipped.`;
-  $("warning").classList.remove("hidden");
- }else $("warning").classList.add("hidden");
- output.value=notecard(song,filename);status.textContent="";result.classList.remove("hidden");
+let midi = null;
+let filename = "";
+
+
+/* =========================
+   FILE UPLOAD
+========================= */
+
+file.onchange = () =>
+{
+    if (file.files[0])
+    {
+        load(file.files[0]);
+    }
 };
 
-copy.onclick=async()=>{
- try{await navigator.clipboard.writeText(output.value)}catch(e){output.select();document.execCommand("copy")}
- status.textContent="✓ Copied. Paste it into a Second Life notecard.";copy.textContent="Copied!";
- setTimeout(()=>copy.textContent="Copy song",1500);
+
+["dragenter", "dragover"].forEach(eventName =>
+{
+    drop.addEventListener(eventName, event =>
+    {
+        event.preventDefault();
+        drop.classList.add("drag");
+    });
+});
+
+
+["dragleave", "drop"].forEach(eventName =>
+{
+    drop.addEventListener(eventName, event =>
+    {
+        event.preventDefault();
+        drop.classList.remove("drag");
+    });
+});
+
+
+drop.ondrop = event =>
+{
+    if (event.dataTransfer.files[0])
+    {
+        load(event.dataTransfer.files[0]);
+    }
 };
 
-function build(t,tempo,tpb){
- const good=[],bad=[];
- for(const n of t.notes){
-  const s=ticksSec(n.start,tempo,tpb),e=ticksSec(n.end,tempo,tpb);
-  if(n.num<low||n.num>high)bad.push(n.num);else good.push({s,d:e-s,num:n.num});
- }
- const map=new Map();
- for(const n of good){const k=Math.round(n.s*1000000);if(!map.has(k))map.set(k,[]);map.get(k).push(n)}
- const events=[...map.values()].sort((a,b)=>a[0].s-b[0].s).map(g=>({
-  s:g[0].s,d:Math.max(...g.map(x=>x.d)),notes:g.sort((a,b)=>a.num-b.num).map(x=>midiName(x.num))
- }));
- return {events,count:good.length,bad,bpm:tempo[0]?.bpm||120,length:events.length?events.at(-1).s+events.at(-1).d:0};
+
+/* =========================
+   LOAD MIDI
+========================= */
+
+async function load(file)
+{
+    try
+    {
+        midi = parseMidi(
+            new Uint8Array(
+                await file.arrayBuffer()
+            )
+        );
+
+        filename = file.name;
+
+        info.textContent =
+            `${file.name} • ${midi.tracks.length} tracks • ${midi.tpb} ticks/beat`;
+
+        track.innerHTML = "";
+
+        midi.tracks.forEach((t, index) =>
+        {
+            const option =
+                document.createElement("option");
+
+            option.value = index;
+
+            option.textContent =
+                `${index + 1}. ${
+                    t.name || "Untitled track"
+                } (${t.notes.length} notes)`;
+
+            track.appendChild(option);
+        });
+
+
+        /*
+            Try to automatically select
+            a useful musical track.
+        */
+
+        const preferred =
+            midi.tracks.findIndex(t =>
+                /violin|melody|flute|lead|voice|guitar|piano|strings/i
+                    .test(t.name)
+            );
+
+
+        track.value =
+            String(
+                preferred < 0
+                    ? 0
+                    : preferred
+            );
+
+
+        tracks.classList.remove("hidden");
+
+        result.classList.add("hidden");
+    }
+    catch (error)
+    {
+        info.textContent =
+            "Could not read MIDI: " +
+            error.message;
+
+        tracks.classList.add("hidden");
+    }
 }
-function notecard(song,name){
- const lines=[`# ${name.replace(/\.(mid|midi)$/i,"").toUpperCase()}`,`# BPM=${song.bpm.toFixed(3)}`,"# FORMAT: time_ms|notes"];
- song.events.forEach(e=>lines.push(`${Math.round(e.s*1000)}|${e.notes.join("+")}`));
- return lines.join("\n");
+
+
+/* =========================
+   CONVERT
+========================= */
+
+convert.onclick = () =>
+{
+    const selectedTrack =
+        midi.tracks[
+            Number(track.value)
+        ];
+
+
+    const song =
+        build(
+            selectedTrack,
+            midi.tempo,
+            midi.tpb
+        );
+
+
+    $("title").textContent =
+        filename.replace(
+            /\.(mid|midi)$/i,
+            ""
+        );
+
+
+    $("sTrack").textContent =
+        selectedTrack.name ||
+        "Untitled";
+
+
+    $("sEvents").textContent =
+        song.events.length;
+
+
+    $("sNotes").textContent =
+        song.count;
+
+
+    $("sTempo").textContent =
+        song.bpm.toFixed(1) +
+        " BPM";
+
+
+    $("sDuration").textContent =
+        formatDuration(song.length);
+
+
+    /*
+        Warn about notes outside
+        the guitar's range.
+    */
+
+    if (song.bad.length > 0)
+    {
+        $("warning").textContent =
+            `${song.bad.length} note(s) outside E1–A#4: ${
+                [...new Set(
+                    song.bad.map(midiName)
+                )].join(", ")
+            }. They are skipped.`;
+
+        $("warning")
+            .classList
+            .remove("hidden");
+    }
+    else
+    {
+        $("warning")
+            .classList
+            .add("hidden");
+    }
+
+
+    output.value =
+        createNotecard(
+            song,
+            filename
+        );
+
+
+    status.textContent = "";
+
+    result.classList.remove("hidden");
+};
+
+
+/* =========================
+   COPY SONG
+========================= */
+
+copy.onclick = async () =>
+{
+    try
+    {
+        await navigator.clipboard.writeText(
+            output.value
+        );
+    }
+    catch (error)
+    {
+        output.select();
+
+        document.execCommand("copy");
+    }
+
+
+    status.textContent =
+        "✓ Copied. Paste it into a Second Life notecard.";
+
+
+    copy.textContent =
+        "Copied!";
+
+
+    setTimeout(() =>
+    {
+        copy.textContent =
+            "Copy song";
+    }, 1500);
+};
+
+
+/* =========================
+   BUILD SONG
+========================= */
+
+function build(track, tempoMap, ticksPerBeat)
+{
+    const good = [];
+    const bad = [];
+
+
+    /*
+        Convert every MIDI note into
+        seconds.
+    */
+
+    for (const note of track.notes)
+    {
+        const start =
+            ticksToSeconds(
+                note.start,
+                tempoMap,
+                ticksPerBeat
+            );
+
+
+        const end =
+            ticksToSeconds(
+                note.end,
+                tempoMap,
+                ticksPerBeat
+            );
+
+
+        /*
+            Check whether the note exists
+            in our guitar sample range.
+        */
+
+        if (
+            note.num < low ||
+            note.num > high
+        )
+        {
+            bad.push(note.num);
+        }
+        else
+        {
+            good.push(
+            {
+                start: start,
+                duration: end - start,
+                num: note.num
+            });
+        }
+    }
+
+
+    /*
+        Group notes that start at the
+        exact same MIDI position.
+
+        This allows chords:
+
+        C4 + E4 + G4
+    */
+
+    const groups = new Map();
+
+
+    for (const note of good)
+    {
+        /*
+            Use microseconds as the key
+            so floating point differences
+            don't split simultaneous notes.
+        */
+
+        const key =
+            Math.round(
+                note.start * 1000000
+            );
+
+
+        if (!groups.has(key))
+        {
+            groups.set(
+                key,
+                []
+            );
+        }
+
+
+        groups
+            .get(key)
+            .push(note);
+    }
+
+
+    /*
+        Convert grouped notes into
+        playable events.
+    */
+
+    const rawEvents =
+        [...groups.values()]
+            .sort(
+                (a, b) =>
+                    a[0].start -
+                    b[0].start
+            )
+            .map(group =>
+            {
+                return {
+                    start:
+                        group[0].start,
+
+                    duration:
+                        Math.max(
+                            ...group.map(
+                                note =>
+                                    note.duration
+                            )
+                        ),
+
+                    notes:
+                        group
+                            .sort(
+                                (a, b) =>
+                                    a.num -
+                                    b.num
+                            )
+                            .map(
+                                note =>
+                                    midiName(
+                                        note.num
+                                    )
+                            )
+                };
+            });
+
+
+    /*
+        IMPORTANT:
+        Normalize the song so the FIRST
+        note starts at 0 milliseconds.
+
+        Without this, MIDI files can contain
+        silence / conductor-track time before
+        the first actual musical note.
+    */
+
+    const firstTime =
+        rawEvents.length > 0
+            ? rawEvents[0].start
+            : 0;
+
+
+    const events =
+        rawEvents.map(event =>
+        {
+            return {
+                start:
+                    event.start -
+                    firstTime,
+
+                duration:
+                    event.duration,
+
+                notes:
+                    event.notes
+            };
+        });
+
+
+    return {
+        events: events,
+
+        count:
+            good.length,
+
+        bad: bad,
+
+        bpm:
+            tempoMap[0]?.bpm ||
+            120,
+
+        length:
+            events.length > 0
+                ? events[
+                    events.length - 1
+                ].start +
+                  events[
+                    events.length - 1
+                ].duration
+                : 0
+    };
 }
-function ticksSec(t,map,tpb){
- let x=map[0]||{tick:0,sec:0,tempo:500000};
- for(let i=1;i<map.length&&map[i].tick<=t;i++)x=map[i];
- return x.sec+(t-x.tick)*(x.tempo/1000000)/tpb;
+
+
+/* =========================
+   CREATE SECOND LIFE
+   NOTECARD
+========================= */
+
+function createNotecard(song, filename)
+{
+    const name =
+        filename.replace(
+            /\.(mid|midi)$/i,
+            ""
+        );
+
+
+    const lines =
+    [
+        "# " +
+        name.toUpperCase(),
+
+        "# BPM=" +
+        song.bpm.toFixed(3),
+
+        "# FORMAT: time_ms|notes"
+    ];
+
+
+    for (const event of song.events)
+    {
+        const time =
+            Math.round(
+                event.start * 1000
+            );
+
+
+        const notes =
+            event.notes.join("+");
+
+
+        lines.push(
+            `${time}|${notes}`
+        );
+    }
+
+
+    return lines.join("\n");
 }
-function parseMidi(b){
- let p=0;const u8=()=>b[p++],u16=()=>{let v=b[p]*256+b[p+1];p+=2;return v},u32=()=>{let v=b[p]*16777216+b[p+1]*65536+b[p+2]*256+b[p+3];p+=4;return v>>>0};
- const str=n=>{let s="";for(let i=0;i<n;i++)s+=String.fromCharCode(b[p++]);return s};
- const vlq=()=>{let v=0,x;do{x=u8();v=(v<<7)|(x&127)}while(x&128);return v};
- if(str(4)!=="MThd")throw Error("Not a MIDI file");const hl=u32(),format=u16(),tc=u16(),tpb=u16();p+=Math.max(0,hl-6);
- const tracks=[],tempos=[{tick:0,tempo:500000}];
- for(let ti=0;ti<tc;ti++){
-  if(str(4)!=="MTrk")throw Error("Invalid MIDI track");const len=u32(),end=p+len;let tick=0,status=0,name="",notes=[],active=new Map();
-  while(p<end){
-   tick+=vlq();let s=b[p];if(s<128)s=status;else{p++;status=s}
-   if(s===255){const type=u8(),n=vlq();if(type===3)name=new TextDecoder().decode(b.slice(p,p+n));if(type===81&&n===3)tempos.push({tick,tempo:(b[p]<<16)|(b[p+1]<<8)|b[p+2]});p+=n;continue}
-   if(s===240||s===247){const n=vlq();p+=n;continue}
-   const type=s&240,ch=s&15;
-   if(type===128||type===144){
-    const num=u8(),vel=u8(),key=ch+":"+num;
-    if(type===144&&vel)active.set(key,{tick,vel});
-    else if(active.has(key)){const on=active.get(key);notes.push({start:on.tick,end:Math.max(tick,on.tick),num,vel:on.vel});active.delete(key)}
-   }else if(type===160||type===176||type===224)p+=2;
-   else if(type===192||type===208)p++;
-   else throw Error("Unsupported MIDI event");
-  }
-  p=end;tracks.push({name,notes});
- }
- tempos.sort((a,b)=>a.tick-b.tick);let lastTick=0,lastSec=0,lastTempo=tempos[0].tempo,map=[];
- for(const e of tempos){if(e.tick===lastTick){lastTempo=e.tempo;continue}lastSec+=(e.tick-lastTick)*(lastTempo/1e6)/tpb;lastTick=e.tick;lastTempo=e.tempo;map.push({tick:e.tick,sec:lastSec,tempo:lastTempo,bpm:60000000/lastTempo})}
- map.unshift({tick:0,sec:0,tempo:tempos[0].tempo,bpm:60000000/tempos[0].tempo});
- return {format,tpb,tracks,tempo:map};
+
+
+/* =========================
+   TICKS → SECONDS
+========================= */
+
+function ticksToSeconds(
+    tick,
+    tempoMap,
+    ticksPerBeat
+)
+{
+    let current =
+        tempoMap[0] ||
+        {
+            tick: 0,
+            sec: 0,
+            tempo: 500000
+        };
+
+
+    for (
+        let i = 1;
+        i < tempoMap.length;
+        i++
+    )
+    {
+        if (
+            tempoMap[i].tick >
+            tick
+        )
+        {
+            break;
+        }
+
+
+        current =
+            tempoMap[i];
+    }
+
+
+    return (
+        current.sec +
+        (
+            tick -
+            current.tick
+        ) *
+        (
+            current.tempo /
+            1000000
+        ) /
+        ticksPerBeat
+    );
 }
-function midiNumber(n){const m=n.match(/^([A-G]#?)(-?\d+)$/),s={C:0,"C#":1,D:2,"D#":3,E:4,F:5,"F#":6,G:7,"G#":8,A:9,"A#":10,B:11};return(+m[2]+1)*12+s[m[1]]}
-function midiName(n){const a=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];return a[n%12]+(Math.floor(n/12)-1)}
-function duration(x){x=Math.round(x);return Math.floor(x/60)+":"+String(x%60).padStart(2,"0")}
+
+
+/* =========================
+   MIDI PARSER
+========================= */
+
+function parseMidi(bytes)
+{
+    let position = 0;
+
+
+    function read8()
+    {
+        return bytes[position++];
+    }
+
+
+    function read16()
+    {
+        const value =
+            bytes[position] * 256 +
+            bytes[position + 1];
+
+        position += 2;
+
+        return value;
+    }
+
+
+    function read32()
+    {
+        const value =
+            bytes[position] *
+            16777216 +
+
+            bytes[position + 1] *
+            65536 +
+
+            bytes[position + 2] *
+            256 +
+
+            bytes[position + 3];
+
+
+        position += 4;
+
+        return value >>> 0;
+    }
+
+
+    function readString(length)
+    {
+        let value = "";
+
+
+        for (
+            let i = 0;
+            i < length;
+            i++
+        )
+        {
+            value +=
+                String.fromCharCode(
+                    bytes[position++]
+                );
+        }
+
+
+        return value;
+    }
+
+
+    function readVLQ()
+    {
+        let value = 0;
+        let byte;
+
+
+        do
+        {
+            byte = read8();
+
+
+            value =
+                (value << 7) |
+                (byte & 127);
+
+        }
+        while (byte & 128);
+
+
+        return value;
+    }
+
+
+    /*
+        MIDI header
+    */
+
+    if (
+        readString(4) !==
+        "MThd"
+    )
+    {
+        throw new Error(
+            "Not a MIDI file"
+        );
+    }
+
+
+    const headerLength =
+        read32();
+
+
+    const format =
+        read16();
+
+
+    const trackCount =
+        read16();
+
+
+    const ticksPerBeat =
+        read16();
+
+
+    /*
+        Skip any extra header bytes.
+    */
+
+    position +=
+        Math.max(
+            0,
+            headerLength - 6
+        );
+
+
+    const tracks = [];
+
+
+    const tempoEvents =
+    [
+        {
+            tick: 0,
+            tempo: 500000
+        }
+    ];
+
+
+    /*
+        Read every track.
+    */
+
+    for (
+        let trackIndex = 0;
+        trackIndex < trackCount;
+        trackIndex++
+    )
+    {
+        if (
+            readString(4) !==
+            "MTrk"
+        )
+        {
+            throw new Error(
+                "Invalid MIDI track"
+            );
+        }
+
+
+        const trackLength =
+            read32();
+
+
+        const trackEnd =
+            position +
+            trackLength;
+
+
+        let absoluteTick = 0;
+
+        let runningStatus = 0;
+
+        let trackName = "";
+
+        const notes = [];
+
+        const activeNotes =
+            new Map();
+
+
+        while (
+            position <
+            trackEnd
+        )
+        {
+            /*
+                Delta time
+            */
+
+            absoluteTick +=
+                readVLQ();
+
+
+            let status =
+                bytes[position];
+
+
+            /*
+                Running status
+            */
+
+            if (
+                status < 128
+            )
+            {
+                status =
+                    runningStatus;
+            }
+            else
+            {
+                position++;
+
+                runningStatus =
+                    status;
+            }
+
+
+            /*
+                Meta events
+            */
+
+            if (
+                status === 255
+            )
+            {
+                const metaType =
+                    read8();
+
+
+                const length =
+                    readVLQ();
+
+
+                /*
+                    Track name
+                */
+
+                if (
+                    metaType === 3
+                )
+                {
+                    trackName =
+                        new TextDecoder()
+                            .decode(
+                                bytes.slice(
+                                    position,
+                                    position +
+                                    length
+                                )
+                            );
+                }
+
+
+                /*
+                    Tempo event
+                */
+
+                if (
+                    metaType === 81 &&
+                    length === 3
+                )
+                {
+                    const tempo =
+                        (
+                            bytes[position] << 16
+                        ) |
+                        (
+                            bytes[position + 1] << 8
+                        ) |
+                        bytes[position + 2];
+
+
+                    tempoEvents.push(
+                    {
+                        tick:
+                            absoluteTick,
+
+                        tempo:
+                            tempo
+                    });
+                }
+
+
+                position +=
+                    length;
+
+
+                continue;
+            }
+
+
+            /*
+                SysEx
+            */
+
+            if (
+                status === 240 ||
+                status === 247
+            )
+            {
+                const length =
+                    readVLQ();
+
+
+                position +=
+                    length;
+
+
+                continue;
+            }
+
+
+            const eventType =
+                status & 240;
+
+
+            const channel =
+                status & 15;
+
+
+            /*
+                Note On / Note Off
+            */
+
+            if (
+                eventType === 128 ||
+                eventType === 144
+            )
+            {
+                const noteNumber =
+                    read8();
+
+
+                const velocity =
+                    read8();
+
+
+                const key =
+                    channel +
+                    ":" +
+                    noteNumber;
+
+
+                /*
+                    Note On
+                */
+
+                if (
+                    eventType === 144 &&
+                    velocity > 0
+                )
+                {
+                    activeNotes.set(
+                        key,
+                        {
+                            tick:
+                                absoluteTick,
+
+                            velocity:
+                                velocity
+                        }
+                    );
+                }
+
+
+                /*
+                    Note Off
+                    OR
+                    Note On velocity 0
+                */
+
+                else if (
+                    activeNotes.has(key)
+                )
+                {
+                    const note =
+                        activeNotes.get(
+                            key
+                        );
+
+
+                    notes.push(
+                    {
+                        start:
+                            note.tick,
+
+                        end:
+                            Math.max(
+                                absoluteTick,
+                                note.tick
+                            ),
+
+                        num:
+                            noteNumber,
+
+                        velocity:
+                            note.velocity
+                    });
+
+
+                    activeNotes.delete(
+                        key
+                    );
+                }
+            }
+
+
+            /*
+                Polyphonic key pressure
+                Control change
+                Pitch bend
+            */
+
+            else if (
+                eventType === 160 ||
+                eventType === 176 ||
+                eventType === 224
+            )
+            {
+                position += 2;
+            }
+
+
+            /*
+                Program change
+                Channel pressure
+            */
+
+            else if (
+                eventType === 192 ||
+                eventType === 208
+            )
+            {
+                position += 1;
+            }
+
+
+            else
+            {
+                throw new Error(
+                    "Unsupported MIDI event"
+                );
+            }
+        }
+
+
+        /*
+            Make sure we're exactly at
+            the end of this track.
+        */
+
+        position =
+            trackEnd;
+
+
+        tracks.push(
+        {
+            name:
+                trackName,
+
+            notes:
+                notes
+        });
+    }
+
+
+    /*
+        Sort tempo events.
+    */
+
+    tempoEvents.sort(
+        (a, b) =>
+            a.tick -
+            b.tick
+    );
+
+
+    /*
+        Build a tempo map.
+    */
+
+    let lastTick = 0;
+
+    let lastSeconds = 0;
+
+    let lastTempo =
+        tempoEvents[0].tempo;
+
+
+    const tempoMap = [];
+
+
+    for (
+        const event of tempoEvents
+    )
+    {
+        if (
+            event.tick ===
+            lastTick
+        )
+        {
+            lastTempo =
+                event.tempo;
+
+            continue;
+        }
+
+
+        lastSeconds +=
+            (
+                event.tick -
+                lastTick
+            ) *
+            (
+                lastTempo /
+                1000000
+            ) /
+            ticksPerBeat;
+
+
+        lastTick =
+            event.tick;
+
+
+        lastTempo =
+            event.tempo;
+
+
+        tempoMap.push(
+        {
+            tick:
+                event.tick,
+
+            sec:
+                lastSeconds,
+
+            tempo:
+                lastTempo,
+
+            bpm:
+                60000000 /
+                lastTempo
+        });
+    }
+
+
+    tempoMap.unshift(
+    {
+        tick: 0,
+
+        sec: 0,
+
+        tempo:
+            tempoEvents[0].tempo,
+
+        bpm:
+            60000000 /
+            tempoEvents[0].tempo
+    });
+
+
+    return {
+        format:
+            format,
+
+        tpb:
+            ticksPerBeat,
+
+        tracks:
+            tracks,
+
+        tempo:
+            tempoMap
+    };
+}
+
+
+/* =========================
+   NOTE CONVERSION
+========================= */
+
+function midiNumber(note)
+{
+    const match =
+        note.match(
+            /^([A-G]#?)(-?\d+)$/
+        );
+
+
+    if (!match)
+    {
+        throw new Error(
+            "Invalid note: " +
+            note
+        );
+    }
+
+
+    const noteValues =
+    {
+        C: 0,
+        "C#": 1,
+        D: 2,
+        "D#": 3,
+        E: 4,
+        F: 5,
+        "F#": 6,
+        G: 7,
+        "G#": 8,
+        A: 9,
+        "A#": 10,
+        B: 11
+    };
+
+
+    return (
+        (
+            Number(match[2]) +
+            1
+        ) *
+        12
+        +
+        noteValues[
+            match[1]
+        ]
+    );
+}
+
+
+function midiName(number)
+{
+    const names =
+    [
+        "C",
+        "C#",
+        "D",
+        "D#",
+        "E",
+        "F",
+        "F#",
+        "G",
+        "G#",
+        "A",
+        "A#",
+        "B"
+    ];
+
+
+    return (
+        names[
+            number % 12
+        ] +
+        (
+            Math.floor(
+                number / 12
+            ) - 1
+        )
+    );
+}
+
+
+/* =========================
+   DURATION FORMAT
+========================= */
+
+function formatDuration(seconds)
+{
+    seconds =
+        Math.round(seconds);
+
+
+    const minutes =
+        Math.floor(
+            seconds / 60
+        );
+
+
+    const remainingSeconds =
+        seconds % 60;
+
+
+    return (
+        minutes +
+        ":" +
+        String(
+            remainingSeconds
+        ).padStart(2, "0")
+    );
+}
