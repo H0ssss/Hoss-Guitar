@@ -89,10 +89,21 @@ async function load(selectedFile)
 
             option.value = index;
 
-            option.textContent =
+            let label =
                 `${index + 1}. ${
                     t.name || "Untitled track"
                 } (${t.notes.length} notes)`;
+
+            const isGuitar =
+                /nylon\s*gtr|nylon\s*guitar|guitar|gtr/i
+                    .test(t.name || "");
+
+            if (isGuitar)
+            {
+                label += " 🎸 Recommended";
+            }
+
+            option.textContent = label;
 
             track.appendChild(option);
         });
