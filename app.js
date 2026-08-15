@@ -89,21 +89,10 @@ async function load(selectedFile)
 
             option.value = index;
 
-            let label =
+            option.textContent =
                 `${index + 1}. ${
                     t.name || "Untitled track"
                 } (${t.notes.length} notes)`;
-
-            const isGuitar =
-                /nylon\s*gtr|nylon\s*guitar|guitar|gtr/i
-                    .test(t.name || "");
-
-            if (isGuitar)
-            {
-                label += " 🎸 Recommended";
-            }
-
-            option.textContent = label;
 
             track.appendChild(option);
         });
@@ -348,29 +337,42 @@ function build(
             );
 
 
-        if (
-            note.num < low ||
-            note.num > high
-        )
-        {
-            bad.push(
-                note.num
-            );
-        }
-        else
-        {
-            good.push(
-            {
-                start:
-                    start,
+        /*
+            Fit notes into the guitar's E1–A#4 range.
 
-                duration:
-                    end - start,
+            Notes above the range are moved down by
+            octaves, and notes below the range are
+            moved up by octaves.
 
-                num:
-                    note.num
-            });
+            Examples:
+                C5  -> C4
+                F5  -> F4
+                G5  -> G4
+        */
+
+        let fittedNum = note.num;
+
+        while (fittedNum > high)
+        {
+            fittedNum -= 12;
         }
+
+        while (fittedNum < low)
+        {
+            fittedNum += 12;
+        }
+
+        good.push(
+        {
+            start:
+                start,
+
+            duration:
+                end - start,
+
+            num:
+                fittedNum
+        });
     }
 
 
