@@ -1,21 +1,68 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MIDI Guitar</title>
-    <link rel="stylesheet" href="style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MIDI Guitar</title>
+<link rel="stylesheet" href="style.css">
 </head>
-
 <body>
+<main class="wrap">
+<header>
+  <div class="logo">🎸 MIDI Guitar</div>
+  <h1>Turn MIDI into a Second Life guitar song.</h1>
+  <p>Your MIDI is processed locally in your browser. It is never uploaded.</p>
+</header>
 
-    <h1>MIDI Guitar</h1>
+<section class="card">
+  <label class="drop" id="drop">
+    <input id="file" type="file" accept=".mid,.midi">
+    <span class="music">♪</span>
+    <strong>Drop a MIDI file here</strong>
+    <small>or click to browse</small>
+  </label>
+  <div id="info" class="info hidden"></div>
 
-    <p>Convert your MIDI into a Second Life guitar song.</p>
+  <div id="tracks" class="hidden">
+    <label for="track">Track to convert</label>
+    <select id="track"></select>
+    <button id="convert">Convert to SL song</button>
+  </div>
+</section>
 
-    <input type="file" id="midi-file" accept=".mid,.midi">
+<section id="result" class="card hidden">
+  <div class="top">
+    <div>
+      <small class="green">READY FOR SECOND LIFE</small>
+      <h2 id="title"></h2>
+    </div>
+    <button id="copy">Copy song</button>
+  </div>
+  <div class="stats">
+    <div><small>Track</small><b id="sTrack"></b></div>
+    <div><small>Events</small><b id="sEvents"></b></div>
+    <div><small>Notes</small><b id="sNotes"></b></div>
+    <div><small>Tempo</small><b id="sTempo"></b></div>
+    <div><small>Duration</small><b id="sDuration"></b></div>
+  </div>
+  <div id="warning" class="warning hidden"></div>
+  <textarea id="output" readonly spellcheck="false"></textarea>
+  <div id="status"></div>
+</section>
 
-    <script src="app.js"></script>
-
+<section class="help">
+<h2>How it works</h2>
+<ol>
+<li>Choose a MIDI file.</li>
+<li>Select the melody/instrument track.</li>
+<li>Convert it.</li>
+<li>Copy the generated text.</li>
+<li>Paste it into a Second Life notecard.</li>
+<li>Drop the notecard into your guitar.</li>
+</ol>
+<p>The guitar sample range used by this prototype is <b>E1–A#4</b>.</p>
+</section>
+</main>
+<script src="app.js"></script>
 </body>
 </html>
