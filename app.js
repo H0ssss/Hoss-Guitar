@@ -25,7 +25,7 @@ const status = $("status");
 const guitars = [
     {
         id: "mdmag",
-        name: "MDMAG Sustain Pick",
+        name: "MDMAG",
         type: "Acoustic Guitar",
         low: midiNumber("E1"),
         high: midiNumber("C5"),
