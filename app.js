@@ -105,6 +105,7 @@ function createGuitarPicker()
     wrapper.innerHTML = `
                 <div style="
                     margin-top: 16px;
+                    margin-bottom: 16px;
                 ">
                     <div style="
                         font-size: 12px;
