@@ -56,6 +56,14 @@ let currentGuitar = guitars[0];
 */
 let pitchShift = 0;
 
+/*
+    Pitch handling modes:
+    - octave: existing behavior, unchanged.
+    - exact: never changes a MIDI note's octave; notes outside
+      the selected guitar range are skipped and reported.
+*/
+let pitchHandling = "octave";
+
 let midi = null;
 let filename = "";
 
@@ -78,6 +86,45 @@ function createGuitarPicker()
         "guitar-picker";
 
     wrapper.innerHTML = `
+                <div style="
+                    margin-top: 16px;
+                ">
+                    <div style="
+                        font-size: 12px;
+                        font-weight: 700;
+                        letter-spacing: 1.2px;
+                        text-transform: uppercase;
+                        opacity: .65;
+                        margin-bottom: 10px;
+                    ">
+                        Pitch handling
+                    </div>
+
+                    <select id="pitch-handling" style="
+                        width: 100%;
+                        max-width: 320px;
+                        border: 1px solid rgba(255,255,255,.14);
+                        border-radius: 12px;
+                        padding: 11px 13px;
+                        background: rgba(255,255,255,.05);
+                        color: inherit;
+                        font: inherit;
+                        cursor: pointer;
+                    ">
+                        <option value="octave" selected>Octave fit (current)</option>
+                        <option value="exact">Exact range (skip outside)</option>
+                    </select>
+
+                    <div style="
+                        margin-top: 7px;
+                        font-size: 12px;
+                        opacity: .55;
+                    ">
+                        Exact range keeps the original MIDI pitch and skips notes Serenelle cannot play.
+                    </div>
+                </div>
+
+
         <div style="
             margin: 0 0 18px 0;
         ">
@@ -299,6 +346,23 @@ createGuitarPicker();
 /* =========================
    PITCH SHIFT
 ========================= */
+
+const pitchHandlingControl =
+    document.getElementById(
+        "pitch-handling"
+    );
+
+if (pitchHandlingControl)
+{
+    pitchHandlingControl.value =
+        pitchHandling;
+
+    pitchHandlingControl.onchange = () =>
+    {
+        pitchHandling =
+            pitchHandlingControl.value;
+    };
+}
 
 const pitchShiftControl =
     document.getElementById(
@@ -539,9 +603,13 @@ convert.onclick = () =>
 
 
         $("warning").textContent =
-            `${song.bad.length} note(s) outside ${currentGuitar.low}–${currentGuitar.high} were skipped: ${
-                uniqueBad.join(", ")
-            }`;
+            pitchHandling === "exact"
+                ? `${song.bad.length} note(s) outside ${midiName(currentGuitar.low)}–${midiName(currentGuitar.high)} were skipped (Exact range): ${
+                    uniqueBad.join(", ")
+                }`
+                : `${song.bad.length} note(s) outside ${midiName(currentGuitar.low)}–${midiName(currentGuitar.high)} could not be used: ${
+                    uniqueBad.join(", ")
+                }`;
 
 
         $("warning")
@@ -640,42 +708,56 @@ function build(
 
 
         /*
-            Fit notes into the guitar's E1–A#4 range.
-
-            Notes above the range are moved down by
-            octaves, and notes below the range are
-            moved up by octaves.
-
-            Examples:
-                C5  -> C4
-                F5  -> F4
-                G5  -> G4
-        */
-
-        /*
             Apply the user's pitch shift first.
-
-            Example:
-                -2 semitones:
-                C4 -> A#3
-                A3 -> G3
-
-            After shifting, fit the result into
-            the selected guitar's playable range.
         */
 
         let fittedNum =
             note.num +
             pitchShift;
 
-        while (fittedNum > currentGuitar.high)
-        {
-            fittedNum -= 12;
-        }
+        /*
+            Pitch handling:
 
-        while (fittedNum < currentGuitar.low)
+            OCTAVE FIT:
+            Existing behavior. Move notes by octaves until
+            they fit inside the selected guitar range.
+
+            EXACT RANGE:
+            Never alter the MIDI pitch. If it is outside
+            the selected guitar's actual sample range,
+            skip it and report it.
+        */
+
+        if (pitchHandling === "exact")
         {
-            fittedNum += 12;
+            if (
+                fittedNum <
+                currentGuitar.low ||
+                fittedNum >
+                currentGuitar.high
+            )
+            {
+                bad.push(fittedNum);
+                continue;
+            }
+        }
+        else
+        {
+            while (
+                fittedNum >
+                currentGuitar.high
+            )
+            {
+                fittedNum -= 12;
+            }
+
+            while (
+                fittedNum <
+                currentGuitar.low
+            )
+            {
+                fittedNum += 12;
+            }
         }
 
         good.push(
