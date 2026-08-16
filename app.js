@@ -16,7 +16,7 @@ const status = $("status");
     GUITAR PROFILES
     =========================
 
-    Serenelle is the current available guitar.
+    MDMAG Sustain Pick is the current available guitar.
 
     Future guitars can be added here without
     changing the MIDI conversion system.
@@ -24,11 +24,28 @@ const status = $("status");
 
 const guitars = [
     {
-        id: "serenelle",
-        name: "Serenelle",
-        type: "12-String Guitar",
+        id: "mdmag",
+        name: "MDMAG Sustain Pick",
+        type: "Acoustic Guitar",
         low: midiNumber("E1"),
-        high: midiNumber("A#4"),
+        high: midiNumber("C5"),
+
+        /*
+            These are the ACTUAL samples uploaded to the
+            Second Life guitar.
+
+            Do not assume every note between low/high exists.
+            The converter uses this list when fitting notes.
+        */
+        availableNotes: [
+            "E1",
+            "F1", "F#1", "G1", "G#1", "A1", "A#1", "B1",
+            "C2", "C#2", "D2", "D#2", "E2", "F2", "F#2", "G2", "G#2", "A2", "A#2", "B2",
+            "C3", "C#3", "D3", "D#3", "E3", "F3", "F#3", "G3", "G#3", "A3", "A#3", "B3",
+            "C4", "C#4", "D4", "D#4", "E4", "F4", "F#4", "G4", "G#4", "A4", "A#4", "B4",
+            "C5"
+        ].map(midiNumber),
+
         available: true
     },
 
@@ -120,7 +137,7 @@ function createGuitarPicker()
                         font-size: 12px;
                         opacity: .55;
                     ">
-                        Exact range keeps the original MIDI pitch and skips notes Serenelle cannot play.
+                        Exact range keeps the original MIDI pitch and skips notes not present in the MDMAG sample set.
                     </div>
                 </div>
 
@@ -604,10 +621,10 @@ convert.onclick = () =>
 
         $("warning").textContent =
             pitchHandling === "exact"
-                ? `${song.bad.length} note(s) outside ${midiName(currentGuitar.low)}–${midiName(currentGuitar.high)} were skipped (Exact range): ${
+                ? `${song.bad.length} note(s) have no exact MDMAG sample and were skipped: ${
                     uniqueBad.join(", ")
                 }`
-                : `${song.bad.length} note(s) outside ${midiName(currentGuitar.low)}–${midiName(currentGuitar.high)} could not be used: ${
+                : `${song.bad.length} note(s) could not be fitted to the MDMAG sample set: ${
                     uniqueBad.join(", ")
                 }`;
 
@@ -716,26 +733,35 @@ function build(
             pitchShift;
 
         /*
-            Pitch handling:
+            MDMAG pitch handling:
+
+            The sample library is NOT chromatically complete
+            across one simple low/high range, so checking only
+            E1–C5 is not enough.
 
             OCTAVE FIT:
-            Existing behavior. Move notes by octaves until
-            they fit inside the selected guitar range.
+            1. Keep the exact MIDI pitch if that sample exists.
+            2. Otherwise move ONLY by octaves.
+            3. Choose the closest available octave.
+            4. Never change the note's pitch class.
 
-            EXACT RANGE:
-            Never alter the MIDI pitch. If it is outside
-            the selected guitar's actual sample range,
-            skip it and report it.
+            Examples:
+                C5  -> C5
+                D5  -> D4
+                D1  -> D2
+                F#5 -> F#4
+
+            EXACT:
+            Keep the exact pitch only. If that exact sample
+            does not exist, skip the note.
         */
+
+        const available =
+            currentGuitar.availableNotes || [];
 
         if (pitchHandling === "exact")
         {
-            if (
-                fittedNum <
-                currentGuitar.low ||
-                fittedNum >
-                currentGuitar.high
-            )
+            if (!available.includes(fittedNum))
             {
                 bad.push(fittedNum);
                 continue;
@@ -743,20 +769,59 @@ function build(
         }
         else
         {
-            while (
-                fittedNum >
-                currentGuitar.high
-            )
+            if (!available.includes(fittedNum))
             {
-                fittedNum -= 12;
-            }
+                let best =
+                    null;
 
-            while (
-                fittedNum <
-                currentGuitar.low
-            )
-            {
-                fittedNum += 12;
+                let bestDistance =
+                    Infinity;
+
+                /*
+                    Search nearby octaves only.
+                    ±8 octaves is more than enough for normal MIDI.
+                */
+                for (
+                    let octave = -8;
+                    octave <= 8;
+                    octave++
+                )
+                {
+                    const candidate =
+                        fittedNum +
+                        (octave * 12);
+
+                    if (
+                        !available.includes(candidate)
+                    )
+                    {
+                        continue;
+                    }
+
+                    const distance =
+                        Math.abs(octave);
+
+                    if (
+                        distance <
+                        bestDistance
+                    )
+                    {
+                        best =
+                            candidate;
+
+                        bestDistance =
+                            distance;
+                    }
+                }
+
+                if (best === null)
+                {
+                    bad.push(fittedNum);
+                    continue;
+                }
+
+                fittedNum =
+                    best;
             }
         }
 
