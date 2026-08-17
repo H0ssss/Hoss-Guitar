@@ -34,7 +34,7 @@ function midiToName(midi) {
 
 function fileForNote(noteName) {
   // Filenames are expected to be exactly A#1.ogg, C4.ogg, etc.
-  return `${currentGuitar.folder}/${noteName}.ogg`;
+  return `${currentGuitar.folder}/${encodeURIComponent(noteName)}.ogg`;
 }
 
 function updateCount() {
