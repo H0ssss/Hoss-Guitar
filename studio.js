@@ -1,7 +1,6 @@
 const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 const GUITARS = {
   mdmag: {
-    id: "mdmag",
     name: "MDMAG Acoustic Guitar",
     low: 28,   // E1
     high: 72,  // C5
@@ -18,6 +17,7 @@ const bufferCache = new Map();
 let playTimer = null;
 let playing = false;
 let playStart = 0;
+const activeSources = new Set();
 
 const $ = id => document.getElementById(id);
 const guitarEl = $("guitar");
@@ -104,7 +104,7 @@ async function getBuffer(pitch) {
   return buffer;
 }
 
-async function playSample(pitch, velocity=100, when=null, duration=1.8) {
+async function playSample(pitch, velocity=100, when=null) {
   try {
     const ctx = await ensureAudio();
     const buffer = await getBuffer(pitch);
@@ -112,14 +112,22 @@ async function playSample(pitch, velocity=100, when=null, duration=1.8) {
 
     const source = ctx.createBufferSource();
     const gain = ctx.createGain();
+
     source.buffer = buffer;
     gain.gain.value = Math.max(0.05, Math.min(1, velocity / 127));
     source.connect(gain).connect(ctx.destination);
 
+    // Keep a reference so STOP can actually stop every currently-playing note.
+    activeSources.add(source);
+    source.onended = () => activeSources.delete(source);
+
     const startAt = when ?? ctx.currentTime;
     source.start(startAt);
-    // Keep preview playback short so composing doesn't create endless overlap.
-    source.stop(Math.min(startAt + duration, startAt + buffer.duration));
+
+    // IMPORTANT:
+    // Do NOT call source.stop() here.
+    // AudioBufferSourceNode naturally plays the complete decoded sample,
+    // which for MDMAG is about 11 seconds.
   } catch (err) {
     console.error(err);
     saveStateEl.textContent = `Sample error: ${err.message}`;
@@ -141,18 +149,34 @@ async function playSong() {
 
   [...notes.entries()].forEach(([id, velocity]) => {
     const [step, pitch] = id.split(":").map(Number);
-    playSample(pitch, velocity, start + step * stepDuration(), stepDuration() * 0.95);
+    playSample(pitch, velocity, start + step * stepDuration());
   });
 
   const duration = (steps * stepDuration() + 0.15) * 1000;
-  playTimer = setTimeout(stopSong, duration);
+  playTimer = setTimeout(() => {
+    playing = false;
+    playTimer = null;
+    saveStateEl.textContent = "Playing — notes still ringing";
+  }, duration);
   saveStateEl.textContent = "Playing";
 }
 
 function stopSong() {
   playing = false;
+
   if (playTimer) clearTimeout(playTimer);
   playTimer = null;
+
+  // Cancel every note that is currently playing or scheduled.
+  for (const source of activeSources) {
+    try {
+      source.stop();
+    } catch (e) {
+      // Source may already have ended.
+    }
+  }
+  activeSources.clear();
+
   saveStateEl.textContent = "Saved";
 }
 
@@ -195,58 +219,6 @@ function exportProject() {
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
   download(blob, "Hoss-Guitar-Project.hoss");
-}
-
-function buildHossText() {
-  const lines = [];
-  lines.push("# HOSS GUITAR SONG");
-  lines.push(`# GUITAR=${currentGuitar.name}`);
-  lines.push(`# BPM=${bpm}`);
-  lines.push("# FORMAT: time_ms|notes");
-  lines.push("");
-
-  const stepMs = 60000 / bpm / 4;
-  const grouped = new Map();
-
-  for (const [id] of notes) {
-    const [step, pitch] = id.split(":").map(Number);
-    const time = Math.round(step * stepMs);
-    const note = midiToName(pitch);
-
-    if (!grouped.has(time)) grouped.set(time, []);
-    grouped.get(time).push(note);
-  }
-
-  [...grouped.keys()].sort((a, b) => a - b).forEach(time => {
-    lines.push(`${time}|${grouped.get(time).join("+")}`);
-  });
-
-  return lines.join("\n");
-}
-
-async function copyHossText() {
-  const text = buildHossText();
-  try {
-    await navigator.clipboard.writeText(text);
-    saveStateEl.textContent = "Hoss text copied";
-  } catch (err) {
-    const area = document.createElement("textarea");
-    area.value = text;
-    area.style.position = "fixed";
-    area.style.left = "-9999px";
-    document.body.appendChild(area);
-    area.select();
-    document.execCommand("copy");
-    area.remove();
-    saveStateEl.textContent = "Hoss text copied";
-  }
-}
-
-function downloadHossText() {
-  download(
-    new Blob([buildHossText()], {type: "text/plain;charset=utf-8"}),
-    "Hoss-Guitar-Song.txt"
-  );
 }
 
 function exportMidi() {
@@ -357,8 +329,6 @@ $("projectFile").onchange = async e => {
 };
 
 $("export").onclick = exportMidi;
-$("copyHoss").onclick = copyHossText;
-$("downloadHoss").onclick = downloadHossText;
 
 bpmEl.onchange = () => {
   bpm = Math.max(30, Math.min(300, Number(bpmEl.value) || 120));
