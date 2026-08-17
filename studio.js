@@ -1,6 +1,7 @@
 const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 const GUITARS = {
   mdmag: {
+    id: "mdmag",
     name: "MDMAG Acoustic Guitar",
     low: 28,   // E1
     high: 72,  // C5
@@ -33,7 +34,7 @@ function midiToName(midi) {
 
 function fileForNote(noteName) {
   // Filenames are expected to be exactly A#1.ogg, C4.ogg, etc.
-  return `${currentGuitar.folder}/${encodeURIComponent(noteName)}.ogg`;
+  return `${currentGuitar.folder}/${noteName}.ogg`;
 }
 
 function updateCount() {
@@ -207,7 +208,7 @@ function buildHossText() {
   const stepMs = 60000 / bpm / 4;
   const grouped = new Map();
 
-  for (const [id, velocity] of notes) {
+  for (const [id] of notes) {
     const [step, pitch] = id.split(":").map(Number);
     const time = Math.round(step * stepMs);
     const note = midiToName(pitch);
@@ -217,21 +218,18 @@ function buildHossText() {
   }
 
   [...grouped.keys()].sort((a, b) => a - b).forEach(time => {
-    const chord = grouped.get(time).join("+");
-    lines.push(`${time}|${chord}`);
+    lines.push(`${time}|${grouped.get(time).join("+")}`);
   });
 
-  return lines.join("\\n");
+  return lines.join("\n");
 }
 
 async function copyHossText() {
   const text = buildHossText();
-
   try {
     await navigator.clipboard.writeText(text);
     saveStateEl.textContent = "Hoss text copied";
   } catch (err) {
-    // Fallback for browsers/contexts where Clipboard API is unavailable.
     const area = document.createElement("textarea");
     area.value = text;
     area.style.position = "fixed";
@@ -245,8 +243,10 @@ async function copyHossText() {
 }
 
 function downloadHossText() {
-  const text = buildHossText();
-  download(new Blob([text], {type: "text/plain;charset=utf-8"}), "Hoss-Guitar-Song.txt");
+  download(
+    new Blob([buildHossText()], {type: "text/plain;charset=utf-8"}),
+    "Hoss-Guitar-Song.txt"
+  );
 }
 
 function exportMidi() {
