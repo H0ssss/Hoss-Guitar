@@ -27,6 +27,10 @@ const rollEl = $("roll");
 const keysEl = $("keys");
 const noteCountEl = $("noteCount");
 const saveStateEl = $("saveState");
+const midiFileEl = $("midiFile");
+const midiTrackEl = $("midiTrack");
+const midiTrackInfoEl = $("midiTrackInfo");
+let importedMidiTracks = [];
 
 function midiToName(midi) {
   const octave = Math.floor(midi / 12) - 1;
@@ -36,6 +40,215 @@ function midiToName(midi) {
 function fileForNote(noteName) {
   // Filenames are expected to be exactly A#1.ogg, C4.ogg, etc.
   return `${currentGuitar.folder}/${encodeURIComponent(noteName)}.ogg`;
+}
+
+
+function readU16(data, pos) {
+  return { value: (data[pos] << 8) | data[pos + 1], pos: pos + 2 };
+}
+
+function readU32(data, pos) {
+  return { value: ((data[pos] * 0x1000000) + (data[pos+1] << 16) + (data[pos+2] << 8) + data[pos+3]), pos: pos + 4 };
+}
+
+function readVLQ(data, pos) {
+  let value = 0, count = 0, b;
+  do {
+    if (pos >= data.length || count++ > 4) throw new Error("Invalid MIDI variable-length value");
+    b = data[pos++];
+    value = (value << 7) | (b & 0x7f);
+  } while (b & 0x80);
+  return { value, pos };
+}
+
+function ascii(data, pos, length) {
+  return String.fromCharCode(...data.slice(pos, pos + length));
+}
+
+function parseMidi(arrayBuffer) {
+  const data = new Uint8Array(arrayBuffer);
+  if (ascii(data, 0, 4) !== "MThd") throw new Error("This is not a valid MIDI file");
+
+  let r = readU32(data, 4);
+  const headerLength = r.value;
+  let pos = r.pos;
+  const fmt = readU16(data, pos); pos = fmt.pos;
+  const tracksCount = readU16(data, pos); pos = tracksCount.pos;
+  const div = readU16(data, pos); pos = div.pos;
+
+  if (div.value & 0x8000) throw new Error("SMPTE MIDI timing is not supported yet");
+  const ticksPerBeat = div.value;
+  pos = 8 + headerLength;
+
+  const tracks = [];
+  const tempoChanges = [{ tick: 0, micros: 500000 }];
+
+  for (let trackIndex = 0; trackIndex < tracksCount; trackIndex++) {
+    if (ascii(data, pos, 4) !== "MTrk") throw new Error("Invalid MIDI track chunk");
+    const len = readU32(data, pos + 4).value;
+    let p = pos + 8;
+    const end = p + len;
+    let tick = 0;
+    let runningStatus = null;
+    const active = new Map();
+    const trackNotes = [];
+    let trackName = `Track ${trackIndex + 1}`;
+
+    while (p < end) {
+      const dt = readVLQ(data, p); tick += dt.value; p = dt.pos;
+      let status = data[p];
+      if (status < 0x80) {
+        if (runningStatus === null) throw new Error("Invalid MIDI running status");
+        status = runningStatus;
+      } else {
+        p++;
+        if (status < 0xF0) runningStatus = status;
+      }
+
+      if (status === 0xFF) {
+        const type = data[p++];
+        const l = readVLQ(data, p); p = l.pos;
+        const bytes = data.slice(p, p + l.value);
+        if (type === 0x03 && bytes.length) trackName = new TextDecoder().decode(bytes);
+        if (type === 0x51 && bytes.length === 3) {
+          const micros = (bytes[0] << 16) | (bytes[1] << 8) | bytes[2];
+          tempoChanges.push({ tick, micros });
+        }
+        p += l.value;
+        if (type === 0x2F) break;
+        continue;
+      }
+
+      if (status === 0xF0 || status === 0xF7) {
+        const l = readVLQ(data, p); p = l.pos + l.value;
+        runningStatus = null;
+        continue;
+      }
+
+      const type = status & 0xF0;
+      if (type === 0xC0 || type === 0xD0) {
+        p += 1;
+        continue;
+      }
+      if (p + 1 >= end) break;
+      const note = data[p++];
+      const value = data[p++];
+
+      if (type === 0x90 && value > 0) {
+        const key = note;
+        if (!active.has(key)) active.set(key, []);
+        active.get(key).push({ tick, velocity: value });
+      } else if (type === 0x80 || (type === 0x90 && value === 0)) {
+        const list = active.get(note);
+        if (list && list.length) {
+          const start = list.shift();
+          trackNotes.push({ tick: start.tick, note, velocity: start.velocity, durationTicks: Math.max(1, tick - start.tick) });
+        }
+      }
+    }
+
+    tracks.push({ index: trackIndex, name: trackName || `Track ${trackIndex + 1}`, notes: trackNotes });
+    pos = end;
+  }
+
+  tempoChanges.sort((a,b) => a.tick - b.tick);
+  return { format: fmt.value, ticksPerBeat, tracks, tempoChanges };
+}
+
+function tickToSeconds(tick, midi) {
+  const changes = midi.tempoChanges;
+  let seconds = 0;
+  let lastTick = 0;
+  let micros = changes[0]?.micros || 500000;
+
+  for (let i = 1; i < changes.length; i++) {
+    const c = changes[i];
+    if (c.tick >= tick) break;
+    seconds += (c.tick - lastTick) * micros / 1000000 / midi.ticksPerBeat;
+    lastTick = c.tick;
+    micros = c.micros;
+  }
+  seconds += (tick - lastTick) * micros / 1000000 / midi.ticksPerBeat;
+  return seconds;
+}
+
+function chooseBpmFromMidi(midi) {
+  const micros = midi.tempoChanges[0]?.micros || 500000;
+  return Math.max(30, Math.min(300, Math.round(60000000 / micros)));
+}
+
+function importMidiNotes(midi, trackSelection) {
+  const selected = trackSelection === "all"
+    ? midi.tracks
+    : [midi.tracks[Number(trackSelection)]];
+
+  const stepSeconds = 60 / bpm / 4;
+  const imported = new Map();
+  let skipped = 0;
+
+  for (const track of selected) {
+    if (!track) continue;
+    for (const event of track.notes) {
+      if (event.note < currentGuitar.low || event.note > currentGuitar.high) {
+        skipped++;
+        continue;
+      }
+      const seconds = tickToSeconds(event.tick, midi);
+      const step = Math.max(0, Math.round(seconds / stepSeconds));
+      const key = `${step}:${event.note}`;
+      const velocity = Math.max(1, Math.min(127, event.velocity));
+      imported.set(key, Math.max(imported.get(key) || 0, velocity));
+    }
+  }
+
+  if (!imported.size) {
+    throw new Error("No notes from that MIDI fit the selected guitar range (E1–C5).");
+  }
+
+  const maxStep = Math.max(...[...imported.keys()].map(id => Number(id.split(":")[0])));
+  while (steps <= maxStep) steps += 16;
+  notes = imported;
+  buildRoll();
+  autoSave();
+  return skipped;
+}
+
+function loadMidiIntoEditor(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const midi = parseMidi(reader.result);
+      importedMidiTracks = [{index: "all", name: "All tracks", notes: []}, ...midi.tracks];
+      const importedBpm = chooseBpmFromMidi(midi);
+      bpm = importedBpm;
+      bpmEl.value = bpm;
+
+      midiTrackEl.innerHTML = "";
+      importedMidiTracks.forEach((track, i) => {
+        const option = document.createElement("option");
+        option.value = String(track.index);
+        option.textContent = track.index === "all"
+          ? `All tracks (${midi.tracks.length})`
+          : `${track.index + 1}: ${track.name} — ${track.notes.length} notes`;
+        midiTrackEl.appendChild(option);
+      });
+      midiTrackEl.disabled = false;
+      midiTrackEl._midi = midi;
+      midiTrackEl._selectedFileName = file.name;
+      midiTrackInfoEl.textContent = file.name;
+
+      importMidiNotes(midi, "all");
+      saveStateEl.textContent = `MIDI imported — ${file.name}`;
+    } catch (err) {
+      console.error(err);
+      alert(`Could not import MIDI: ${err.message}`);
+      saveStateEl.textContent = "MIDI import failed";
+    } finally {
+      midiFileEl.value = "";
+    }
+  };
+  reader.onerror = () => alert("Could not read the MIDI file.");
+  reader.readAsArrayBuffer(file);
 }
 
 function updateCount() {
@@ -438,6 +651,25 @@ $("projectFile").onchange = async e => {
 $("export").onclick = exportMidi;
 $("copyHoss").onclick = copyHossText;
 $("downloadHoss").onclick = downloadHossText;
+
+$("loadMidi").onclick = () => midiFileEl.click();
+midiFileEl.onchange = e => {
+  const file = e.target.files[0];
+  if (file) loadMidiIntoEditor(file);
+};
+
+midiTrackEl.onchange = () => {
+  const midi = midiTrackEl._midi;
+  if (!midi) return;
+  try {
+    const skipped = importMidiNotes(midi, midiTrackEl.value);
+    saveStateEl.textContent = skipped
+      ? `Track loaded — ${skipped} out-of-range notes skipped`
+      : "Track loaded ✓";
+  } catch (err) {
+    alert(err.message);
+  }
+};
 
 bpmEl.onchange = () => {
   bpm = Math.max(30, Math.min(300, Number(bpmEl.value) || 120));

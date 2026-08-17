@@ -4,10 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hoss Guitar Music Studio</title>
-<link
-    rel="icon"
-    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎹</text></svg>"
->
 <link rel="stylesheet" href="studio.css">
 </head>
 <body>
@@ -41,7 +37,9 @@
 <button id="copyHoss" class="secondary">📋 Copy Hoss Guitar Text</button>
 <button id="downloadHoss" class="secondary">📄 Get Text File</button>
     <button id="save" class="secondary">Save Project</button>
+    <button id="loadMidi" class="secondary">🎵 Upload MIDI</button>
     <button id="load" class="secondary">Load Project</button>
+    <input id="midiFile" type="file" accept=".mid,.midi,audio/midi" hidden>
     <input id="projectFile" type="file" accept=".hoss,.json" hidden>
   </section>
 
@@ -50,6 +48,15 @@
     <div><span>Range</span><b>E1 → C5</b></div>
     <div><span>Notes</span><b id="noteCount">0</b></div>
     <div><span>Autosave</span><b id="saveState">Ready</b></div>
+    <div><span>MIDI Track</span><b id="midiTrackInfo">—</b></div>
+  </section>
+
+  <section class="card midi-import card">
+    <div class="field">
+      <label for="midiTrack">Imported MIDI Track</label>
+      <select id="midiTrack" disabled><option>Upload a MIDI first</option></select>
+    </div>
+    <p class="muted">Upload a MIDI, choose a track, and it will be placed on the piano roll. Notes are quantized to the 16th-note grid so you can clean up timing and notes before exporting.</p>
   </section>
 
   <section class="card piano-card">
