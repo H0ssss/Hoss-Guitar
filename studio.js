@@ -14,6 +14,7 @@ let bpm = 120;
 let notes = new Map(); // key: "step:pitch", value: velocity
 let audioContext = null;
 const bufferCache = new Map();
+const bufferPromises = new Map();
 let playTimer = null;
 let playing = false;
 let playStart = 0;
@@ -94,14 +95,24 @@ async function getBuffer(pitch) {
   const name = midiToName(pitch);
   if (!currentGuitar.availableNotes?.includes(pitch)) return null;
   if (bufferCache.has(name)) return bufferCache.get(name);
+  if (bufferPromises.has(name)) return bufferPromises.get(name);
 
-  const response = await fetch(fileForNote(name));
-  if (!response.ok) throw new Error(`Missing sample: ${name}.ogg`);
-  const arrayBuffer = await response.arrayBuffer();
-  const ctx = await ensureAudio();
-  const buffer = await ctx.decodeAudioData(arrayBuffer);
-  bufferCache.set(name, buffer);
-  return buffer;
+  const promise = (async () => {
+    const response = await fetch(fileForNote(name), { cache: "force-cache" });
+    if (!response.ok) throw new Error(`Missing sample: ${name}.ogg`);
+    const arrayBuffer = await response.arrayBuffer();
+    const ctx = await ensureAudio();
+    const buffer = await ctx.decodeAudioData(arrayBuffer);
+    bufferCache.set(name, buffer);
+    return buffer;
+  })();
+
+  bufferPromises.set(name, promise);
+  try {
+    return await promise;
+  } finally {
+    bufferPromises.delete(name);
+  }
 }
 
 async function playSample(pitch, velocity=100, when=null) {
@@ -140,25 +151,57 @@ function stepDuration() {
 
 async function playSong() {
   if (playing || notes.size === 0) return;
-  playing = true;
-  await ensureAudio();
 
-  const ctx = audioContext;
-  const start = ctx.currentTime + 0.08;
-  playStart = performance.now();
+  try {
+    playing = true;
+    saveStateEl.textContent = "Loading guitar sounds…";
 
-  [...notes.entries()].forEach(([id, velocity]) => {
-    const [step, pitch] = id.split(":").map(Number);
-    playSample(pitch, velocity, start + step * stepDuration());
-  });
+    const ctx = await ensureAudio();
 
-  const duration = (steps * stepDuration() + 0.15) * 1000;
-  playTimer = setTimeout(() => {
+    // IMPORTANT: load/decode every sample BEFORE scheduling playback.
+    // Otherwise a slow network request can make source.start() receive a
+    // start time that is already in the past, which makes playback unreliable.
+    const pitches = [...new Set([...notes.keys()].map(id => Number(id.split(":")[1])))];
+    await Promise.all(pitches.map(async pitch => {
+      try {
+        await getBuffer(pitch);
+      } catch (err) {
+        console.error(err);
+      }
+    }));
+
+    if (!playing) return;
+
+    const start = ctx.currentTime + 0.12;
+    playStart = performance.now();
+
+    for (const [id, velocity] of notes) {
+      const [step, pitch] = id.split(":").map(Number);
+      const buffer = bufferCache.get(midiToName(pitch));
+      if (!buffer) continue;
+
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
+      source.buffer = buffer;
+      gain.gain.value = Math.max(0.05, Math.min(1, velocity / 127));
+      source.connect(gain).connect(ctx.destination);
+      activeSources.add(source);
+      source.onended = () => activeSources.delete(source);
+      source.start(start + step * stepDuration());
+    }
+
+    const duration = (steps * stepDuration() + 0.15) * 1000;
+    playTimer = setTimeout(() => {
+      playing = false;
+      playTimer = null;
+      saveStateEl.textContent = "Finished — notes may still be ringing";
+    }, duration);
+    saveStateEl.textContent = "Playing";
+  } catch (err) {
+    console.error(err);
     playing = false;
-    playTimer = null;
-    saveStateEl.textContent = "Playing — notes still ringing";
-  }, duration);
-  saveStateEl.textContent = "Playing";
+    saveStateEl.textContent = `Playback error: ${err.message}`;
+  }
 }
 
 function stopSong() {
@@ -219,6 +262,70 @@ function exportProject() {
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
   download(blob, "Hoss-Guitar-Project.hoss");
+}
+
+function buildHossText() {
+  const lines = [
+    "# HOSS GUITAR SONG",
+    `# GUITAR=${currentGuitar.name}`,
+    `# BPM=${bpm}`,
+    "# FORMAT: time_ms|notes",
+    ""
+  ];
+
+  const stepMs = 60000 / bpm / 4;
+  const events = [];
+  for (const [id] of notes) {
+    const [step, pitch] = id.split(":").map(Number);
+    events.push({ time: Math.round(step * stepMs), note: midiToName(pitch) });
+  }
+  events.sort((a,b) => a.time - b.time);
+
+  if (!events.length) {
+    lines.push("0|");
+    return lines.join("\n");
+  }
+
+  const firstTime = events[0].time;
+  const grouped = new Map();
+  for (const e of events) {
+    const time = e.time - firstTime;
+    if (!grouped.has(time)) grouped.set(time, []);
+    grouped.get(time).push(e.note);
+  }
+  for (const [time, list] of grouped) lines.push(`${time}|${list.join("+")}`);
+  return lines.join("\n");
+}
+
+async function copyHossText() {
+  const text = buildHossText();
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.focus();
+      area.select();
+      area.setSelectionRange(0, area.value.length);
+      const ok = document.execCommand("copy");
+      area.remove();
+      if (!ok) throw new Error("Clipboard copy was blocked by the browser");
+    }
+    saveStateEl.textContent = "Hoss text copied ✓";
+  } catch (err) {
+    console.error(err);
+    saveStateEl.textContent = "Copy blocked — use Get Text File";
+  }
+}
+
+function downloadHossText() {
+  download(new Blob([buildHossText()], {type:"text/plain;charset=utf-8"}), "Hoss-Guitar-Song.txt", "text/plain");
+  saveStateEl.textContent = "Text file downloaded ✓";
 }
 
 function exportMidi() {
@@ -329,6 +436,8 @@ $("projectFile").onchange = async e => {
 };
 
 $("export").onclick = exportMidi;
+$("copyHoss").onclick = copyHossText;
+$("downloadHoss").onclick = downloadHossText;
 
 bpmEl.onchange = () => {
   bpm = Math.max(30, Math.min(300, Number(bpmEl.value) || 120));
