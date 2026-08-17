@@ -196,6 +196,59 @@ function exportProject() {
   download(blob, "Hoss-Guitar-Project.hoss");
 }
 
+function buildHossText() {
+  const lines = [];
+  lines.push("# HOSS GUITAR SONG");
+  lines.push(`# GUITAR=${currentGuitar.name}`);
+  lines.push(`# BPM=${bpm}`);
+  lines.push("# FORMAT: time_ms|notes");
+  lines.push("");
+
+  const stepMs = 60000 / bpm / 4;
+  const grouped = new Map();
+
+  for (const [id, velocity] of notes) {
+    const [step, pitch] = id.split(":").map(Number);
+    const time = Math.round(step * stepMs);
+    const note = midiToName(pitch);
+
+    if (!grouped.has(time)) grouped.set(time, []);
+    grouped.get(time).push(note);
+  }
+
+  [...grouped.keys()].sort((a, b) => a - b).forEach(time => {
+    const chord = grouped.get(time).join("+");
+    lines.push(`${time}|${chord}`);
+  });
+
+  return lines.join("\\n");
+}
+
+async function copyHossText() {
+  const text = buildHossText();
+
+  try {
+    await navigator.clipboard.writeText(text);
+    saveStateEl.textContent = "Hoss text copied";
+  } catch (err) {
+    // Fallback for browsers/contexts where Clipboard API is unavailable.
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.left = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+    saveStateEl.textContent = "Hoss text copied";
+  }
+}
+
+function downloadHossText() {
+  const text = buildHossText();
+  download(new Blob([text], {type: "text/plain;charset=utf-8"}), "Hoss-Guitar-Song.txt");
+}
+
 function exportMidi() {
   // Standard format 0 MIDI. One track, 480 ticks/beat.
   const TPB = 480;
@@ -304,6 +357,8 @@ $("projectFile").onchange = async e => {
 };
 
 $("export").onclick = exportMidi;
+$("copyHoss").onclick = copyHossText;
+$("downloadHoss").onclick = downloadHossText;
 
 bpmEl.onchange = () => {
   bpm = Math.max(30, Math.min(300, Number(bpmEl.value) || 120));
