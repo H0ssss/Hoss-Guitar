@@ -32,8 +32,8 @@ function midiToName(midi) {
 }
 
 function fileForNote(noteName) {
-  // Filenames are expected to be exactly A#1.wav, C4.wav, etc.
-  return `${currentGuitar.folder}/${encodeURIComponent(noteName)}.wav`;
+  // Filenames are expected to be exactly A#1.ogg, C4.ogg, etc.
+  return `${currentGuitar.folder}/${encodeURIComponent(noteName)}.ogg`;
 }
 
 function updateCount() {
@@ -95,7 +95,7 @@ async function getBuffer(pitch) {
   if (bufferCache.has(name)) return bufferCache.get(name);
 
   const response = await fetch(fileForNote(name));
-  if (!response.ok) throw new Error(`Missing sample: ${name}.wav`);
+  if (!response.ok) throw new Error(`Missing sample: ${name}.ogg`);
   const arrayBuffer = await response.arrayBuffer();
   const ctx = await ensureAudio();
   const buffer = await ctx.decodeAudioData(arrayBuffer);
