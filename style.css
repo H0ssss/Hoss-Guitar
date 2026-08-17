@@ -223,3 +223,33 @@ textarea {
         width: 100%
     }
 }
+.site-nav {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin: 0 auto 30px;
+    flex-wrap: wrap;
+}
+.site-nav a {
+    color: var(--muted);
+    text-decoration: none;
+    border: 1px solid var(--line);
+    padding: 9px 14px;
+    border-radius: 999px;
+}
+.site-nav a.active,
+.site-nav a:hover {
+    color: var(--text);
+    border-color: #555c6c;
+    background: #171a22;
+}
+.studio-link p { color: var(--muted); }
+.studio-button {
+    display: inline-block;
+    background: var(--green);
+    color: #090c06;
+    text-decoration: none;
+    font-weight: 850;
+    padding: 11px 16px;
+    border-radius: 11px;
+}

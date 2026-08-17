@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hoss Guitar Music Studio</title>
+<link rel="stylesheet" href="studio.css">
+</head>
+<body>
+<main class="wrap">
+  <nav class="site-nav">
+    <a href="index.html">MIDI Converter</a>
+    <a href="studio.html" class="active">🎹 Music Studio</a>
+  </nav>
+
+  <header>
+    <div class="logo">🎸 Hoss Guitar Music Studio</div>
+    <h1>Make music with the Hoss Guitar sound set.</h1>
+    <p>Choose a guitar, place notes, hear the real samples, and export standard MIDI.</p>
+  </header>
+
+  <section class="toolbar card">
+    <div class="field">
+      <label for="guitar">Guitar</label>
+      <select id="guitar">
+        <option value="mdmag">MDMAG Acoustic Guitar</option>
+      </select>
+    </div>
+    <div class="field small">
+      <label for="bpm">BPM</label>
+      <input id="bpm" type="number" min="30" max="300" value="120">
+    </div>
+    <button id="play">▶ Play</button>
+    <button id="stop" class="secondary">■ Stop</button>
+    <button id="clear" class="secondary">Clear</button>
+    <button id="export" class="secondary">Export MIDI</button>
+    <button id="save" class="secondary">Save Project</button>
+    <button id="load" class="secondary">Load Project</button>
+    <input id="projectFile" type="file" accept=".hoss,.json" hidden>
+  </section>
+
+  <section class="card info-row">
+    <div><span>Guitar</span><b id="guitarInfo">MDMAG Acoustic Guitar</b></div>
+    <div><span>Range</span><b>E1 → C5</b></div>
+    <div><span>Notes</span><b id="noteCount">0</b></div>
+    <div><span>Autosave</span><b id="saveState">Ready</b></div>
+  </section>
+
+  <section class="card piano-card">
+    <div class="piano-head">
+      <div>
+        <strong>Piano Roll</strong>
+        <small>Click cells to add/remove notes. Drag vertically across the grid for chords.</small>
+      </div>
+      <div class="zoom">
+        <button id="zoomOut" class="secondary">−</button>
+        <span id="zoomValue">16 steps</span>
+        <button id="zoomIn" class="secondary">+</button>
+      </div>
+    </div>
+    <div class="roll-wrap">
+      <div class="keys" id="keys"></div>
+      <div class="roll" id="roll"></div>
+    </div>
+  </section>
+
+  <section class="card help">
+    <h2>How to use it</h2>
+    <ol>
+      <li>Choose your guitar.</li>
+      <li>Click a grid cell to place a note.</li>
+      <li>Press Play to hear the selected guitar samples.</li>
+      <li>Change BPM and build chords by placing notes on the same step.</li>
+      <li>Your project is automatically saved in this browser.</li>
+      <li>Export MIDI when you're finished.</li>
+    </ol>
+    <p class="muted">Your MIDI/project stays on the user's device. The guitar samples are loaded from this website when needed.</p>
+  </section>
+</main>
+<script src="studio.js"></script>
+</body>
+</html>
