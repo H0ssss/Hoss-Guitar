@@ -16,14 +16,6 @@ let audioContext = null;
 const bufferCache = new Map();
 const bufferPromises = new Map();
 let playTimer = null;
-let playheadFrame = null;
-let playTimelineStart = 0;
-let playTimelineDuration = 0;
-let playPositionMs = 0;
-let playAnchorPositionMs = 0;
-let audioPlayStartTime = 0;       // AudioContext time where this run begins
-let audioTimelineStartMs = 0;     // editor position represented by audioPlayStartTime
-let draggingPlayhead = false;
 let playing = false;
 let playStart = 0;
 const activeSources = new Set();
@@ -52,16 +44,7 @@ function updateCount() {
 
 function buildRoll() {
   keysEl.innerHTML = "";
-
-  // Keep the playhead element alive when rebuilding the piano roll.
-  // The previous version used rollEl.innerHTML = "", which deleted #playhead.
   rollEl.innerHTML = "";
-  const playhead = document.createElement("div");
-  playhead.id = "playhead";
-  playhead.className = "playhead";
-  playhead.title = "Drag to seek";
-  rollEl.appendChild(playhead);
-
   rollEl.style.gridTemplateColumns = `repeat(${steps}, 64px)`;
 
   for (let pitch = currentGuitar.high; pitch >= currentGuitar.low; pitch--) {
@@ -100,9 +83,6 @@ function buildRoll() {
     }
   }
   updateCount();
-
-  setupPlayheadDragging();
-  if (!playing) setPlayPosition(playPositionMs, false);
 }
 
 async function ensureAudio() {
@@ -162,337 +142,191 @@ async function playSample(pitch, velocity=100, when=null) {
   } catch (err) {
     console.error(err);
     saveStateEl.textContent = `Sample error: ${err.message}`;
-    throw err;
   }
-}
-
-function scheduleSampleNow(pitch, velocity, when) {
-  const ctx = audioContext;
-  const name = midiToName(pitch);
-  const buffer = bufferCache.get(name);
-
-  if (!ctx || !buffer) {
-    throw new Error(`Sample buffer not ready: ${name}.ogg`);
-  }
-
-  const source = ctx.createBufferSource();
-  const gain = ctx.createGain();
-
-  source.buffer = buffer;
-  gain.gain.value = Math.max(0.05, Math.min(1, velocity / 127));
-  source.connect(gain).connect(ctx.destination);
-
-  activeSources.add(source);
-  source.onended = () => activeSources.delete(source);
-
-  source.start(Math.max(when, ctx.currentTime));
-  return source;
 }
 
 function stepDuration() {
   return 60 / bpm / 4; // 16th note
 }
 
-function formatTime(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60).toString().padStart(2, "0");
-  return `${mins}:${secs}`;
+async 
+// ===== Visual playback indicator =====
+// This layer does NOT control audio. It only follows the existing working
+// playback engine, so adding the playhead cannot break sample playback.
+let indicatorFrame = null;
+let indicatorStartWall = 0;
+let indicatorStartMs = 0;
+let indicatorDurationMs = 0;
+
+function indicatorFormatTime(ms) {
+  ms = Math.max(0, Number(ms) || 0);
+  const total = Math.floor(ms / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-function getSongEvents() {
-  const stepMs = stepDuration();
-  const events = new Map();
+function indicatorEvents() {
+  const stepMs = stepDuration() * 1000;
+  const map = new Map();
 
   for (const [id] of notes) {
     const [step, pitch] = id.split(":").map(Number);
-    if (!events.has(step)) events.set(step, []);
-    events.get(step).push(pitch);
+    if (!map.has(step)) map.set(step, []);
+    map.get(step).push(pitch);
   }
 
-  return [...events.entries()]
+  return [...map.entries()]
     .map(([step, pitches]) => ({
-      step,
-      timeMs: step * stepMs,
+      time: step * stepMs,
       pitches: [...new Set(pitches)].sort((a, b) => b - a)
     }))
-    .sort((a, b) => a.step - b.step);
+    .sort((a, b) => a.time - b.time);
 }
 
-function updateNextNote(nowMs = 0) {
-  const nextEl = $("nextNote");
-  if (!nextEl) return;
-
-  const next = getSongEvents().find(event => event.timeMs >= nowMs - 5);
-
-  if (!next) {
-    nextEl.textContent = "—";
-    return;
-  }
-
-  nextEl.textContent = next.pitches
-    .map(p => midiToName(p))
-    .join(" + ");
-}
-
-function setPlaybackUI(state, currentMs = 0) {
-  const totalMs = Math.max(playTimelineDuration, 0);
-  const stateEl = $("playbackState");
-  const timeEl = $("playbackTime");
-  const dot = $("playbackDot");
+function indicatorSetState(state, currentMs) {
+  const stateEl = document.getElementById("playbackState");
+  const timeEl = document.getElementById("playbackTime");
+  const dot = document.getElementById("playbackDot");
 
   if (stateEl) stateEl.textContent = state;
   if (timeEl) {
     timeEl.textContent =
-      `${formatTime(currentMs / 1000)} / ${formatTime(totalMs / 1000)}`;
+      `${indicatorFormatTime(currentMs)} / ${indicatorFormatTime(indicatorDurationMs)}`;
   }
-  if (dot) {
-    dot.classList.toggle("playing", state === "Playing");
-    dot.classList.toggle("paused", state === "Paused");
-  }
+  if (dot) dot.classList.toggle("playing", state === "Playing");
 }
 
-function stopPlayheadAnimation() {
-  if (playheadFrame !== null) {
-    cancelAnimationFrame(playheadFrame);
-    playheadFrame = null;
+function indicatorNext(currentMs) {
+  const el = document.getElementById("nextNote");
+  if (!el) return;
+
+  const next = indicatorEvents().find(e => e.time >= currentMs - 2);
+  el.textContent = next
+    ? next.pitches.map(p => midiToName(p)).join(" + ")
+    : "—";
+}
+
+function indicatorEnsurePlayhead() {
+  const roll = document.getElementById("roll");
+  if (!roll) return null;
+
+  let line = document.getElementById("playhead");
+  if (!line) {
+    line = document.createElement("div");
+    line.id = "playhead";
+    line.className = "playhead";
+    roll.appendChild(line);
   }
+  return line;
 }
 
-function songDurationMs() {
-  // The editor timeline is the actual grid, not just the last note.
-  // This prevents playback from ending immediately when the last event is
-  // close to the beginning of a long piano-roll.
-  return Math.max(0, steps * stepDuration() * 1000);
+function indicatorSetPosition(ms) {
+  const line = indicatorEnsurePlayhead();
+  if (!line) return;
+
+  const total = Math.max(1, indicatorDurationMs);
+  const percent = Math.max(0, Math.min(100, (ms / total) * 100));
+  line.style.left = `${percent}%`;
 }
 
-function setPlayPosition(ms, follow = true) {
-  const duration = songDurationMs();
-  playTimelineDuration = duration;
-  playPositionMs = Math.max(0, Math.min(duration, Number(ms) || 0));
+function updateStudioIndicator(now) {
+  if (!playing) return;
 
-  const playhead = $("playhead");
-  const rollWrap = $("rollWrap");
-  if (playhead) {
-    const pixelsPerStep = 64;
-    const x = stepDuration() > 0
-      ? (playPositionMs / (stepDuration() * 1000)) * pixelsPerStep
-      : 0;
-    playhead.style.left = `${x}px`;
-
-    if (follow && rollWrap) {
-      const margin = Math.min(160, rollWrap.clientWidth * 0.25);
-      const viewportLeft = rollWrap.scrollLeft;
-      const viewportRight = viewportLeft + rollWrap.clientWidth;
-      if (x < viewportLeft + margin) {
-        rollWrap.scrollLeft = Math.max(0, x - margin);
-      } else if (x > viewportRight - margin) {
-        rollWrap.scrollLeft = Math.max(0, x - rollWrap.clientWidth + margin);
-      }
-    }
-  }
-
-  setPlaybackUI(playing ? "Playing" : "Stopped", playPositionMs);
-  updateNextNote(playPositionMs);
-}
-
-function updatePlayhead() {
-  if (!playing || !audioContext) return;
-
-  // Web Audio's clock is the source of truth for an audio editor.
-  // requestAnimationFrame is ONLY used to draw the UI.
-  const elapsedMs = Math.max(
-    0,
-    (audioContext.currentTime - audioPlayStartTime) * 1000
+  const elapsed = Math.max(0, performance.now() - indicatorStartWall);
+  const current = Math.min(
+    indicatorDurationMs,
+    indicatorStartMs + elapsed
   );
 
-  const currentMs = Math.min(
-    playTimelineDuration,
-    audioTimelineStartMs + elapsedMs
+  indicatorSetPosition(current);
+  indicatorSetState("Playing", current);
+  indicatorNext(current);
+
+  if (current < indicatorDurationMs && playing) {
+    indicatorFrame = requestAnimationFrame(updateStudioIndicator);
+  }
+}
+
+function startStudioIndicator(startMs = 0) {
+  cancelAnimationFrame(indicatorFrame);
+
+  indicatorDurationMs = Math.max(
+    1,
+    steps * stepDuration() * 1000
   );
 
-  setPlayPosition(currentMs, true);
+  indicatorStartMs = Math.max(0, Math.min(indicatorDurationMs, startMs));
+  indicatorStartWall = performance.now();
 
-  if (currentMs < playTimelineDuration && playing) {
-    playheadFrame = requestAnimationFrame(updatePlayhead);
-  } else if (playing) {
-    playing = false;
-    playheadFrame = null;
-    playPositionMs = playTimelineDuration;
-    setPlayPosition(playTimelineDuration, true);
-    updateNextNote(Number.POSITIVE_INFINITY);
-    setPlaybackUI("Finished", playTimelineDuration);
-  }
+  indicatorSetPosition(indicatorStartMs);
+  indicatorSetState("Playing", indicatorStartMs);
+  indicatorNext(indicatorStartMs);
+
+  indicatorFrame = requestAnimationFrame(updateStudioIndicator);
 }
 
-function getPlaybackEventsFrom(startMs) {
-  return getSongEvents().filter(event => event.timeMs >= startMs - 0.5);
+function stopStudioIndicator(state = "Stopped", ms = 0) {
+  cancelAnimationFrame(indicatorFrame);
+  indicatorFrame = null;
+
+  indicatorDurationMs = Math.max(1, steps * stepDuration() * 1000);
+  indicatorSetPosition(ms);
+  indicatorSetState(state, ms);
+  indicatorNext(ms);
 }
 
-async function startPlaybackFrom(positionMs = 0) {
-  if (!notes.size) {
-    saveStateEl.textContent = "Add some notes first";
-    return;
-  }
-
-  if (playTimer) clearTimeout(playTimer);
-  playTimer = null;
-  stopPlayheadAnimation();
-
-  for (const source of activeSources) {
-    try { source.stop(); } catch (e) {}
-  }
-  activeSources.clear();
-
-  const events = getSongEvents();
-  if (!events.length) return;
-
-  playTimelineDuration = songDurationMs();
-
-  positionMs = Number(positionMs) || 0;
-  if (positionMs >= playTimelineDuration - 1) positionMs = 0;
-  positionMs = Math.max(0, Math.min(playTimelineDuration, positionMs));
-
-  const eventsToPlay = events.filter(
-    event => event.timeMs >= positionMs - 0.5 &&
-             event.timeMs < playTimelineDuration
-  );
-
-  const requiredPitches = [...new Set(eventsToPlay.flatMap(e => e.pitches))];
-
-  // User gesture -> resume AudioContext before scheduling.
-  const ctx = await ensureAudio();
-
-  // Decode everything BEFORE starting the timeline.
-  await Promise.all(requiredPitches.map(pitch => getBuffer(pitch)));
-
-  // From this point onward, timing is entirely controlled by AudioContext.
-  const startDelay = 0.10;
-  audioPlayStartTime = ctx.currentTime + startDelay;
-  audioTimelineStartMs = positionMs;
-
-  playPositionMs = positionMs;
-  playAnchorPositionMs = positionMs;
-  playing = true;
-
-  setPlayPosition(positionMs, true);
-  setPlaybackUI("Playing", positionMs);
-  updateNextNote(positionMs);
-
-  stopPlayheadAnimation();
-  playheadFrame = requestAnimationFrame(updatePlayhead);
-
-  // Schedule ALL notes against the same AudioContext clock.
-  for (const event of eventsToPlay) {
-    const when = audioPlayStartTime +
-      Math.max(0, event.timeMs - positionMs) / 1000;
-
-    for (const pitch of event.pitches) {
-      const velocity = notes.get(`${event.step}:${pitch}`) ?? 100;
-      scheduleSampleNow(pitch, velocity, when);
-    }
-  }
-
-  // Do not use the JS clock to determine when the song finishes.
-  // The animation loop watches the same audio clock as the scheduled notes.
-}
-
-async function playSong() {
-  if (playing) return;
-
-  const startPosition =
-    playPositionMs >= songDurationMs() - 1 ? 0 : playPositionMs;
+function playSong() {
+  if (playing || notes.size === 0) return;
 
   try {
-    await startPlaybackFrom(startPosition);
+    playing = true;
+    saveStateEl.textContent = "Loading guitar sounds…";
+
+    const ctx = await ensureAudio();
+
+    // IMPORTANT: load/decode every sample BEFORE scheduling playback.
+    // Otherwise a slow network request can make source.start() receive a
+    // start time that is already in the past, which makes playback unreliable.
+    const pitches = [...new Set([...notes.keys()].map(id => Number(id.split(":")[1])))];
+    await Promise.all(pitches.map(async pitch => {
+      try {
+        await getBuffer(pitch);
+      } catch (err) {
+        console.error(err);
+      }
+    }));
+
+    if (!playing) return;
+
+    const start = ctx.currentTime + 0.12;
+    playStart = performance.now();
+
+    for (const [id, velocity] of notes) {
+      const [step, pitch] = id.split(":").map(Number);
+      const buffer = bufferCache.get(midiToName(pitch));
+      if (!buffer) continue;
+
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
+      source.buffer = buffer;
+      gain.gain.value = Math.max(0.05, Math.min(1, velocity / 127));
+      source.connect(gain).connect(ctx.destination);
+      activeSources.add(source);
+      source.onended = () => activeSources.delete(source);
+      source.start(start + step * stepDuration());
+    }
+
+    const duration = (steps * stepDuration() + 0.15) * 1000;
+    playTimer = setTimeout(() => {
+      playing = false;
+      playTimer = null;
+      saveStateEl.textContent = "Finished — notes may still be ringing";
+    }, duration);
+    saveStateEl.textContent = "Playing";
   } catch (err) {
     console.error(err);
     playing = false;
-    stopPlayheadAnimation();
-    setPlaybackUI("Ready", playPositionMs);
     saveStateEl.textContent = `Playback error: ${err.message}`;
   }
-}
-
-function seekFromPointer(event) {
-  const rect = rollEl.getBoundingClientRect();
-  const x = Math.max(0, event.clientX - rect.left + $("rollWrap").scrollLeft);
-  const duration = songDurationMs();
-  const ms = Math.min(duration, Math.max(0, (x / 64) * stepDuration() * 1000));
-  return ms;
-}
-
-function setupPlayheadDragging() {
-  const playhead = $("playhead");
-  if (!playhead || playhead.dataset.dragReady) return;
-  playhead.dataset.dragReady = "1";
-
-  playhead.addEventListener("pointerdown", event => {
-    event.preventDefault();
-    event.stopPropagation();
-    draggingPlayhead = true;
-    playhead.setPointerCapture(event.pointerId);
-    setPlayPosition(seekFromPointer(event), false);
-    playhead.classList.add("dragging");
-  });
-
-  playhead.addEventListener("pointermove", event => {
-    if (!draggingPlayhead) return;
-    event.preventDefault();
-    setPlayPosition(seekFromPointer(event), true);
-  });
-
-  const finishDrag = async event => {
-    if (!draggingPlayhead) return;
-    draggingPlayhead = false;
-    playhead.classList.remove("dragging");
-    try { playhead.releasePointerCapture(event.pointerId); } catch (e) {}
-
-    if (playing) {
-      try {
-        await startPlaybackFrom(playPositionMs);
-      } catch (err) {
-        console.error(err);
-        playing = false;
-        setPlaybackUI("Ready", playPositionMs);
-        saveStateEl.textContent = `Playback error: ${err.message}`;
-      }
-    }
-  };
-
-  playhead.addEventListener("pointerup", finishDrag);
-  playhead.addEventListener("pointercancel", finishDrag);
-
-  // Clicking anywhere on the timeline also seeks.
-  $("rollWrap").addEventListener("pointerdown", event => {
-    if (event.target.closest(".cell") || event.target === playhead) return;
-    setPlayPosition(seekFromPointer(event), true);
-  });
-}
-
-function pauseSong() {
-  if (!playing) return;
-
-  const elapsedMs = audioContext
-    ? Math.max(0, (audioContext.currentTime - audioPlayStartTime) * 1000)
-    : 0;
-
-  playPositionMs = Math.min(
-    playTimelineDuration,
-    audioTimelineStartMs + elapsedMs
-  );
-
-  playing = false;
-  stopPlayheadAnimation();
-
-  for (const source of activeSources) {
-    try { source.stop(); } catch (e) {}
-  }
-  activeSources.clear();
-
-  setPlayPosition(playPositionMs, true);
-  setPlaybackUI("Paused", playPositionMs);
-  updateNextNote(playPositionMs);
 }
 
 function stopSong() {
@@ -500,20 +334,17 @@ function stopSong() {
 
   if (playTimer) clearTimeout(playTimer);
   playTimer = null;
-  stopPlayheadAnimation();
 
+  // Cancel every note that is currently playing or scheduled.
   for (const source of activeSources) {
     try {
       source.stop();
-    } catch (e) {}
+    } catch (e) {
+      // Source may already have ended.
+    }
   }
   activeSources.clear();
 
-  playPositionMs = 0;
-  playAnchorPositionMs = 0;
-  playTimelineDuration = songDurationMs();
-  setPlayPosition(0, false);
-  setPlaybackUI("Stopped", 0);
   saveStateEl.textContent = "Saved";
 }
 
@@ -842,7 +673,6 @@ function download(data, filename, type="application/octet-stream") {
 
 $("play").onclick = playSong;
 $("stop").onclick = stopSong;
-$("pause").onclick = pauseSong;
 
 $("clear").onclick = () => {
   if (!confirm("Clear this project?")) return;
@@ -907,3 +737,29 @@ for (let p = currentGuitar.low; p <= currentGuitar.high; p++) {
 
 buildRoll();
 loadAutoSave();
+
+
+// Wrap the existing audio functions. The original audio implementation stays
+// untouched; these wrappers only update the visual indicator.
+const _workingPlaySong = playSong;
+playSong = async function() {
+  const result = await _workingPlaySong.apply(this, arguments);
+  if (playing) {
+    startStudioIndicator(0);
+  }
+  return result;
+};
+
+const _workingStopSong = stopSong;
+stopSong = function() {
+  const result = _workingStopSong.apply(this, arguments);
+  stopStudioIndicator("Stopped", 0);
+  return result;
+};
+
+
+setTimeout(() => {
+  if (document.getElementById("playbackState") && !playing) {
+    stopStudioIndicator("Ready", 0);
+  }
+}, 0);
