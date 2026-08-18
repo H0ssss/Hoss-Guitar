@@ -441,7 +441,10 @@ async function playSong(startPositionMs = 0) {
     const start = ctx.currentTime + 0.12;
 
     // Same wall-clock used by pause, so the pause position is accurate.
-    playStart = performance.now();
+    // playStart represents the wall-clock moment corresponding to 0ms
+    // of the song. On resume, subtract the resume position so Pause returns
+    // to the exact timeline position.
+    playStart = performance.now() - resumeFrom;
 
     // Schedule only notes that have not already happened.
     for (const [id, velocity] of notes) {
@@ -483,6 +486,8 @@ async function playSong(startPositionMs = 0) {
 
     saveStateEl.textContent = resumeFrom > 0 ? "Playing from pause position" : "Playing";
     hossIndicatorStart(resumeFrom);
+    // Audio starts 120ms in the future; keep the visual clock aligned with it.
+    hossIndicatorStartedAt += 120;
   } catch (err) {
     console.error(err);
     playing = false;
@@ -1018,3 +1023,5 @@ function hossBindPlayheadSeek() {
 window.addEventListener("load", () => {
   hossBindPlayheadSeek();
 });
+
+window.addEventListener("load", hossResetPauseButton);
