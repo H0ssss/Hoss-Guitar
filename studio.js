@@ -21,8 +21,10 @@ let playStart = 0;
 let playPositionMs = 0;
 
 // Zoom must exist BEFORE buildRoll() because buildRoll() uses it.
-let hossZoom = 1;
+let hossZoomX = 1;
+let hossZoomY = 1;
 const HOSS_BASE_CELL_WIDTH = 64;
+const HOSS_BASE_ROW_HEIGHT = 28;
 
 const activeSources = new Set();
 
@@ -59,7 +61,7 @@ function buildRoll() {
   rollEl.appendChild(playhead);
 
   rollEl.style.gridTemplateColumns =
-    `repeat(${steps}, ${Math.round(HOSS_BASE_CELL_WIDTH * hossZoom)}px)`;
+    `repeat(${steps}, ${Math.round(HOSS_BASE_CELL_WIDTH * hossZoomX)}px)`;
 
   for (let pitch = currentGuitar.high; pitch >= currentGuitar.low; pitch--) {
     const key = document.createElement("div");
@@ -70,6 +72,7 @@ function buildRoll() {
     for (let step = 0; step < steps; step++) {
       const cell = document.createElement("div");
       cell.className = "cell";
+      cell.style.height = `${Math.round(HOSS_BASE_ROW_HEIGHT * hossZoomY)}px`;
       if (step % 4 === 0) cell.classList.add("beat");
       if (step % 16 === 0) cell.classList.add("bar");
 
@@ -98,6 +101,12 @@ function buildRoll() {
   }
   updateCount();
   hossApplyZoom();
+}
+
+function songDurationMs() {
+  // The editor timeline is one step per grid cell.
+  // Keep a small tail after the last cell so the last note can ring.
+  return Math.max(0, steps * stepDuration() * 1000);
 }
 
 async function ensureAudio() {
@@ -853,30 +862,46 @@ function hossApplyZoom() {
   const roll = document.getElementById("roll");
   if (!roll) return;
 
-  const width = Math.round(HOSS_BASE_CELL_WIDTH * hossZoom);
-  roll.style.gridTemplateColumns = `repeat(${steps}, ${width}px)`;
+  const cellWidth = Math.round(HOSS_BASE_CELL_WIDTH * hossZoomX);
+  const rowHeight = Math.round(HOSS_BASE_ROW_HEIGHT * hossZoomY);
+
+  roll.style.gridTemplateColumns = `repeat(${steps}, ${cellWidth}px)`;
+  roll.style.gridAutoRows = `${rowHeight}px`;
+
+  document.querySelectorAll("#roll .cell").forEach(cell => {
+    cell.style.height = `${rowHeight}px`;
+    cell.style.minHeight = `${rowHeight}px`;
+  });
 
   const label = document.getElementById("zoomValue");
-  if (label) label.textContent = `${Math.round(hossZoom * 100)}%`;
-}
-
-function hossSetZoom(value) {
-  hossZoom = Math.max(0.35, Math.min(2.5, value));
-  hossApplyZoom();
+  if (label) {
+    label.textContent =
+      `${Math.round(hossZoomX * 100)}% × ${Math.round(hossZoomY * 100)}%`;
+  }
 }
 
 function hossZoomIn() {
-  hossSetZoom(hossZoom + 0.15);
+  hossZoomX = Math.min(3, hossZoomX + 0.15);
+  hossZoomY = Math.min(3, hossZoomY + 0.15);
+  hossApplyZoom();
 }
 
 function hossZoomOut() {
-  hossSetZoom(hossZoom - 0.15);
+  hossZoomX = Math.max(0.25, hossZoomX - 0.15);
+  hossZoomY = Math.max(0.25, hossZoomY - 0.15);
+  hossApplyZoom();
 }
 
-const zoomInBtn = document.getElementById("zoomIn");
-const zoomOutBtn = document.getElementById("zoomOut");
 
-if (zoomInBtn) zoomInBtn.addEventListener("click", hossZoomIn);
-if (zoomOutBtn) zoomOutBtn.addEventListener("click", hossZoomOut);
 
-hossApplyZoom();
+document.addEventListener("DOMContentLoaded", () => {
+  const zoomInBtn = document.getElementById("zoomIn");
+  const zoomOutBtn = document.getElementById("zoomOut");
+
+  if (zoomInBtn) zoomInBtn.onclick = hossZoomIn;
+  if (zoomOutBtn) zoomOutBtn.onclick = hossZoomOut;
+
+  hossApplyZoom();
+});
+
+window.addEventListener('load', () => hossApplyZoom());
