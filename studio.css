@@ -193,3 +193,15 @@ button:disabled{opacity:.4;cursor:not-allowed}
   cursor: ew-resize;
   pointer-events: auto;
 }
+
+/* The playhead is draggable; everything else in the roll remains a normal
+   piano-roll editing surface. */
+#roll .cell {
+  position: relative;
+  z-index: 1;
+}
+#roll .playhead {
+  z-index: 100;
+  pointer-events: auto;
+  cursor: ew-resize;
+}

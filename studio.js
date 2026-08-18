@@ -373,17 +373,11 @@ function hossPauseResume() {
   const btn = document.getElementById("pause");
 
   if (playing) {
-    // The working audio engine uses playStart = performance.now().
-    // Use that SAME clock here so pausing at 10.0s stays at 10.0s.
     const elapsedMs = playStart
       ? Math.max(0, performance.now() - playStart)
-      : 0;
+      : playPositionMs;
 
-    playPositionMs = Math.max(
-      0,
-      Math.min(songDurationMs(), elapsedMs)
-    );
-
+    playPositionMs = Math.max(0, Math.min(songDurationMs(), elapsedMs));
     playing = false;
 
     if (playTimer) {
@@ -391,23 +385,34 @@ function hossPauseResume() {
       playTimer = null;
     }
 
-    // Stop only the currently scheduled/playing sources.
     for (const source of activeSources) {
       try { source.stop(); } catch (e) {}
     }
     activeSources.clear();
 
-    if (btn) btn.textContent = "▶ Resume";
+    // Explicitly switch the actual button to Resume.
+    if (btn) {
+      btn.textContent = "▶ Resume";
+      btn.setAttribute("aria-label", "Resume");
+    }
 
-    // Freeze the visual indicator at the EXACT same position.
     hossIndicatorStop("Paused", playPositionMs);
     saveStateEl.textContent = `Paused at ${hossFmt(playPositionMs)}`;
     return;
   }
 
   // Resume from the frozen position.
-  if (btn) btn.textContent = "⏸ Pause";
-  playSong(playPositionMs);
+  if (btn) {
+    btn.textContent = "⏳ Loading…";
+    btn.setAttribute("aria-label", "Resume loading");
+  }
+
+  try {
+    playSong(playPositionMs);
+  } catch (e) {
+    if (btn) btn.textContent = "▶ Resume";
+    throw e;
+  }
 }
 
 async function playSong(startPositionMs = 0) {
@@ -420,6 +425,12 @@ async function playSong(startPositionMs = 0) {
     );
 
     playing = true;
+
+    const pauseBtn = document.getElementById("pause");
+    if (pauseBtn) {
+      pauseBtn.textContent = "⏸ Pause";
+      pauseBtn.setAttribute("aria-label", "Pause");
+    }
     saveStateEl.textContent = "Loading guitar sounds…";
 
     const ctx = await ensureAudio();
@@ -967,56 +978,88 @@ window.addEventListener('load', () => hossApplyZoom());
 
 function hossBindPlayheadSeek() {
   const rollWrap = document.querySelector(".roll-wrap");
-  if (!rollWrap || rollWrap.dataset.seekBound === "1") return;
+  const roll = document.getElementById("roll");
+  if (!rollWrap || !roll || rollWrap.dataset.seekBound === "1") return;
 
   rollWrap.dataset.seekBound = "1";
   let dragging = false;
+  let draggedLine = false;
 
-  const seekFromEvent = (event, resumeAfter) => {
-    const rect = rollWrap.getBoundingClientRect();
-    const x = event.clientX - rect.left + rollWrap.scrollLeft;
-    const totalWidth = Math.max(1, rollWrap.scrollWidth);
-    const target = Math.max(
+  function positionFromPointer(event) {
+    const rect = roll.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const totalWidth = Math.max(1, roll.scrollWidth);
+    return Math.max(
       0,
       Math.min(songDurationMs(), (x / totalWidth) * songDurationMs())
     );
-    hossSeekToMs(target, resumeAfter);
-  };
+  }
 
-  rollWrap.addEventListener("pointerdown", event => {
-    const line = document.getElementById("playhead");
-    const lineRect = line ? line.getBoundingClientRect() : null;
-
-    // Clicking anywhere on the timeline seeks. Clicking/dragging the red
-    // playhead has the same behavior.
-    dragging = true;
-    rollWrap.setPointerCapture?.(event.pointerId);
-    seekFromEvent(event, false);
-  });
-
-  rollWrap.addEventListener("pointermove", event => {
-    if (!dragging) return;
-    // During dragging, don't repeatedly restart audio. Just move the cursor.
-    const rect = rollWrap.getBoundingClientRect();
-    const x = event.clientX - rect.left + rollWrap.scrollLeft;
-    const totalWidth = Math.max(1, rollWrap.scrollWidth);
-    const target = Math.max(
-      0,
-      Math.min(songDurationMs(), (x / totalWidth) * songDurationMs())
-    );
+  function updateCursorOnly(event) {
+    const target = positionFromPointer(event);
     playPositionMs = target;
     hossIndicatorStop(playing ? "Playing" : "Ready", target);
-  });
+  }
 
-  rollWrap.addEventListener("pointerup", event => {
-    if (!dragging) return;
-    dragging = false;
-    const resume = playing;
-    seekFromEvent(event, resume);
-  });
+  // ONLY the red playhead starts a drag.
+  roll.addEventListener("pointerdown", event => {
+    const line = document.getElementById("playhead");
+    if (!line) return;
 
-  rollWrap.addEventListener("pointercancel", () => {
+    const r = line.getBoundingClientRect();
+    const hitWidth = Math.max(14, r.width + 12);
+
+    if (
+      event.clientX >= r.left - hitWidth / 2 &&
+      event.clientX <= r.right + hitWidth / 2
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      dragging = true;
+      draggedLine = true;
+      roll.setPointerCapture?.(event.pointerId);
+    }
+  }, true);
+
+  roll.addEventListener("pointermove", event => {
+    if (!dragging || !draggedLine) return;
+    event.preventDefault();
+    event.stopPropagation();
+    updateCursorOnly(event);
+  }, true);
+
+  roll.addEventListener("pointerup", event => {
+    if (!dragging || !draggedLine) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const wasPlaying = playing;
+    const target = positionFromPointer(event);
+
     dragging = false;
+    draggedLine = false;
+
+    // Seek only after the drag ends. If it was playing, resume there.
+    hossSeekToMs(target, wasPlaying);
+  }, true);
+
+  roll.addEventListener("pointercancel", () => {
+    dragging = false;
+    draggedLine = false;
+  }, true);
+
+  // Clicking the empty timeline/header area can seek, but clicks on actual
+  // note cells are left completely alone so the editor can add/remove notes.
+  roll.addEventListener("click", event => {
+    const cell = event.target.closest(".cell");
+    if (cell) return;
+
+    const line = document.getElementById("playhead");
+    if (line && event.target === line) return;
+
+    const target = positionFromPointer(event);
+    hossSeekToMs(target, false);
   });
 }
 
