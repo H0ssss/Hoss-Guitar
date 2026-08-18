@@ -47,7 +47,15 @@ function updateCount() {
 
 function buildRoll() {
   keysEl.innerHTML = "";
+
+  // Keep the playhead element alive when rebuilding the piano roll.
+  // The previous version used rollEl.innerHTML = "", which deleted #playhead.
   rollEl.innerHTML = "";
+  const playhead = document.createElement("div");
+  playhead.id = "playhead";
+  playhead.className = "playhead";
+  rollEl.appendChild(playhead);
+
   rollEl.style.gridTemplateColumns = `repeat(${steps}, 64px)`;
 
   for (let pitch = currentGuitar.high; pitch >= currentGuitar.low; pitch--) {
@@ -86,6 +94,11 @@ function buildRoll() {
     }
   }
   updateCount();
+
+  if (!playing) {
+    const playhead = $("playhead");
+    if (playhead) playhead.style.left = "0%";
+  }
 }
 
 async function ensureAudio() {
@@ -145,6 +158,7 @@ async function playSample(pitch, velocity=100, when=null) {
   } catch (err) {
     console.error(err);
     saveStateEl.textContent = `Sample error: ${err.message}`;
+    throw err;
   }
 }
 
@@ -152,7 +166,7 @@ function stepDuration() {
   return 60 / bpm / 4; // 16th note
 }
 
-async function formatTime(seconds) {
+function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60).toString().padStart(2, "0");
@@ -179,27 +193,36 @@ function getSongEvents() {
 }
 
 function updateNextNote(nowMs = 0) {
+  const nextEl = $("nextNote");
+  if (!nextEl) return;
+
   const next = getSongEvents().find(event => event.timeMs >= nowMs - 5);
 
   if (!next) {
-    $("nextNote").textContent = "—";
+    nextEl.textContent = "—";
     return;
   }
 
-  $("nextNote").textContent = next.pitches
+  nextEl.textContent = next.pitches
     .map(p => midiToName(p))
     .join(" + ");
 }
 
 function setPlaybackUI(state, currentMs = 0) {
   const totalMs = Math.max(playTimelineDuration, 0);
-  $("playbackState").textContent = state;
-  $("playbackTime").textContent =
-    `${formatTime(currentMs / 1000)} / ${formatTime(totalMs / 1000)}`;
-
+  const stateEl = $("playbackState");
+  const timeEl = $("playbackTime");
   const dot = $("playbackDot");
-  dot.classList.toggle("playing", state === "Playing");
-  dot.classList.toggle("paused", state === "Paused");
+
+  if (stateEl) stateEl.textContent = state;
+  if (timeEl) {
+    timeEl.textContent =
+      `${formatTime(currentMs / 1000)} / ${formatTime(totalMs / 1000)}`;
+  }
+  if (dot) {
+    dot.classList.toggle("playing", state === "Playing");
+    dot.classList.toggle("paused", state === "Paused");
+  }
 }
 
 function stopPlayheadAnimation() {
@@ -252,7 +275,7 @@ async function playSong() {
     playing = true;
     playTimelineStart = performance.now();
     playTimelineDuration = events.length
-      ? events[events.length - 1].timeMs
+      ? events[events.length - 1].timeMs + stepDuration() * 1000
       : 0;
 
     // Keep the playhead timeline long enough to reach the last event.
@@ -264,7 +287,7 @@ async function playSong() {
     for (const event of events) {
       for (const pitch of event.pitches) {
         const velocity = notes.get(`${event.step}:${pitch}`) ?? 100;
-        playSample(pitch, velocity, start + event.timeMs / 1000);
+        await playSample(pitch, velocity, start + event.timeMs / 1000);
       }
     }
 
