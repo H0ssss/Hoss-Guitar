@@ -363,13 +363,18 @@ function hossIndicatorStop(state = "Stopped", ms = 0) {
 
 
 
+
+function hossResetPauseButton() {
+  const btn = document.getElementById("pause");
+  if (btn) btn.textContent = "⏸ Pause";
+}
+
 function hossPauseResume() {
   const btn = document.getElementById("pause");
 
   if (playing) {
-    // playStart is performance.now(), so calculate the elapsed time using
-    // performance.now() too. The previous version mixed it with
-    // AudioContext.currentTime, which are different clocks.
+    // The working audio engine uses playStart = performance.now().
+    // Use that SAME clock here so pausing at 10.0s stays at 10.0s.
     const elapsedMs = playStart
       ? Math.max(0, performance.now() - playStart)
       : 0;
@@ -386,6 +391,7 @@ function hossPauseResume() {
       playTimer = null;
     }
 
+    // Stop only the currently scheduled/playing sources.
     for (const source of activeSources) {
       try { source.stop(); } catch (e) {}
     }
@@ -393,12 +399,13 @@ function hossPauseResume() {
 
     if (btn) btn.textContent = "▶ Resume";
 
+    // Freeze the visual indicator at the EXACT same position.
     hossIndicatorStop("Paused", playPositionMs);
-    saveStateEl.textContent = "Paused";
+    saveStateEl.textContent = `Paused at ${hossFmt(playPositionMs)}`;
     return;
   }
 
-  // Resume from the exact paused position.
+  // Resume from the frozen position.
   if (btn) btn.textContent = "⏸ Pause";
   playSong(playPositionMs);
 }
@@ -499,6 +506,7 @@ function stopSong() {
   const pauseBtn = document.getElementById("pause");
   if (pauseBtn) pauseBtn.textContent = "⏸ Pause";
 
+  hossResetPauseButton();
   hossIndicatorStop("Stopped", 0);
   saveStateEl.textContent = "Saved";
 }
@@ -889,8 +897,11 @@ let hossLastPlaying = false;
 
 function hossWatchPlayback() {
   if (!playing && hossLastPlaying) {
-    // The audio engine stopped externally.
-    hossIndicatorStop("Stopped", playPositionMs);
+    // Don't overwrite an intentional Pause/Stop UI update.
+    if (!document.getElementById("pause") ||
+        document.getElementById("pause").textContent !== "▶ Resume") {
+      hossIndicatorStop("Stopped", playPositionMs);
+    }
   }
   hossLastPlaying = playing;
   hossIndicatorWatcher = requestAnimationFrame(hossWatchPlayback);
