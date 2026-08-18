@@ -324,7 +324,7 @@ async function startPlaybackFrom(positionMs = 0) {
     const relativeMs = event.timeMs - timelineStart;
     for (const pitch of event.pitches) {
       const velocity = notes.get(`${event.step}:${pitch}`) ?? 100;
-      await playSample(pitch, velocity, start + relativeMs / 1000);
+      playSample(pitch, velocity, start + relativeMs / 1000);
     }
   }
 
