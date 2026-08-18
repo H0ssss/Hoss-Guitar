@@ -16,6 +16,9 @@ let audioContext = null;
 const bufferCache = new Map();
 const bufferPromises = new Map();
 let playTimer = null;
+let playheadFrame = null;
+let playTimelineStart = 0;
+let playTimelineDuration = 0;
 let playing = false;
 let playStart = 0;
 const activeSources = new Set();
@@ -149,57 +152,140 @@ function stepDuration() {
   return 60 / bpm / 4; // 16th note
 }
 
+async function formatTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60).toString().padStart(2, "0");
+  return `${mins}:${secs}`;
+}
+
+function getSongEvents() {
+  const stepMs = stepDuration();
+  const events = new Map();
+
+  for (const [id] of notes) {
+    const [step, pitch] = id.split(":").map(Number);
+    if (!events.has(step)) events.set(step, []);
+    events.get(step).push(pitch);
+  }
+
+  return [...events.entries()]
+    .map(([step, pitches]) => ({
+      step,
+      timeMs: step * stepMs,
+      pitches: [...new Set(pitches)].sort((a, b) => b - a)
+    }))
+    .sort((a, b) => a.step - b.step);
+}
+
+function updateNextNote(nowMs = 0) {
+  const next = getSongEvents().find(event => event.timeMs >= nowMs - 5);
+
+  if (!next) {
+    $("nextNote").textContent = "—";
+    return;
+  }
+
+  $("nextNote").textContent = next.pitches
+    .map(p => midiToName(p))
+    .join(" + ");
+}
+
+function setPlaybackUI(state, currentMs = 0) {
+  const totalMs = Math.max(playTimelineDuration, 0);
+  $("playbackState").textContent = state;
+  $("playbackTime").textContent =
+    `${formatTime(currentMs / 1000)} / ${formatTime(totalMs / 1000)}`;
+
+  const dot = $("playbackDot");
+  dot.classList.toggle("playing", state === "Playing");
+  dot.classList.toggle("paused", state === "Paused");
+}
+
+function stopPlayheadAnimation() {
+  if (playheadFrame !== null) {
+    cancelAnimationFrame(playheadFrame);
+    playheadFrame = null;
+  }
+}
+
+function updatePlayhead(now) {
+  if (!playing) return;
+
+  const elapsedMs = Math.max(0, (now - playTimelineStart) * 1000);
+  const progress = playTimelineDuration
+    ? Math.min(1, elapsedMs / playTimelineDuration)
+    : 0;
+
+  const playhead = $("playhead");
+  if (playhead) {
+    playhead.style.left = `${progress * 100}%`;
+  }
+
+  setPlaybackUI("Playing", elapsedMs);
+  updateNextNote(elapsedMs);
+
+  if (elapsedMs < playTimelineDuration) {
+    playheadFrame = requestAnimationFrame(updatePlayhead);
+  }
+}
+
 async function playSong() {
-  if (playing || notes.size === 0) return;
+  if (playing) return;
+  if (!notes.size) {
+    saveStateEl.textContent = "Add some notes first";
+    return;
+  }
 
   try {
+    const events = getSongEvents();
+    const requiredPitches = [...new Set(events.flatMap(e => e.pitches))];
+
+    await ensureAudio();
+
+    // Preload every sample before scheduling so playback is deterministic.
+    await Promise.all(requiredPitches.map(pitch => getBuffer(pitch)));
+
+    const ctx = audioContext;
+    const start = ctx.currentTime + 0.08;
+
     playing = true;
-    saveStateEl.textContent = "Loading guitar sounds…";
+    playTimelineStart = performance.now();
+    playTimelineDuration = events.length
+      ? events[events.length - 1].timeMs
+      : 0;
 
-    const ctx = await ensureAudio();
+    // Keep the playhead timeline long enough to reach the last event.
+    setPlaybackUI("Playing", 0);
+    updateNextNote(0);
+    stopPlayheadAnimation();
+    playheadFrame = requestAnimationFrame(updatePlayhead);
 
-    // IMPORTANT: load/decode every sample BEFORE scheduling playback.
-    // Otherwise a slow network request can make source.start() receive a
-    // start time that is already in the past, which makes playback unreliable.
-    const pitches = [...new Set([...notes.keys()].map(id => Number(id.split(":")[1])))];
-    await Promise.all(pitches.map(async pitch => {
-      try {
-        await getBuffer(pitch);
-      } catch (err) {
-        console.error(err);
+    for (const event of events) {
+      for (const pitch of event.pitches) {
+        const velocity = notes.get(`${event.step}:${pitch}`) ?? 100;
+        playSample(pitch, velocity, start + event.timeMs / 1000);
       }
-    }));
-
-    if (!playing) return;
-
-    const start = ctx.currentTime + 0.12;
-    playStart = performance.now();
-
-    for (const [id, velocity] of notes) {
-      const [step, pitch] = id.split(":").map(Number);
-      const buffer = bufferCache.get(midiToName(pitch));
-      if (!buffer) continue;
-
-      const source = ctx.createBufferSource();
-      const gain = ctx.createGain();
-      source.buffer = buffer;
-      gain.gain.value = Math.max(0.05, Math.min(1, velocity / 127));
-      source.connect(gain).connect(ctx.destination);
-      activeSources.add(source);
-      source.onended = () => activeSources.delete(source);
-      source.start(start + step * stepDuration());
     }
 
-    const duration = (steps * stepDuration() + 0.15) * 1000;
+    const duration = (playTimelineDuration + 50) * 1000;
     playTimer = setTimeout(() => {
       playing = false;
       playTimer = null;
-      saveStateEl.textContent = "Finished — notes may still be ringing";
+      stopPlayheadAnimation();
+
+      const playhead = $("playhead");
+      if (playhead) playhead.style.left = "100%";
+
+      setPlaybackUI("Finished", playTimelineDuration);
+      updateNextNote(Number.POSITIVE_INFINITY);
     }, duration);
-    saveStateEl.textContent = "Playing";
+
   } catch (err) {
     console.error(err);
     playing = false;
+    stopPlayheadAnimation();
+    setPlaybackUI("Ready", 0);
     saveStateEl.textContent = `Playback error: ${err.message}`;
   }
 }
@@ -209,17 +295,20 @@ function stopSong() {
 
   if (playTimer) clearTimeout(playTimer);
   playTimer = null;
+  stopPlayheadAnimation();
 
-  // Cancel every note that is currently playing or scheduled.
   for (const source of activeSources) {
     try {
       source.stop();
-    } catch (e) {
-      // Source may already have ended.
-    }
+    } catch (e) {}
   }
   activeSources.clear();
 
+  const playhead = $("playhead");
+  if (playhead) playhead.style.left = "0%";
+
+  setPlaybackUI("Stopped", 0);
+  updateNextNote(0);
   saveStateEl.textContent = "Saved";
 }
 
