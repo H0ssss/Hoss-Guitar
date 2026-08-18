@@ -19,6 +19,8 @@ let playTimer = null;
 let playheadFrame = null;
 let playTimelineStart = 0;
 let playTimelineDuration = 0;
+let playPositionMs = 0;
+let draggingPlayhead = false;
 let playing = false;
 let playStart = 0;
 const activeSources = new Set();
@@ -54,6 +56,7 @@ function buildRoll() {
   const playhead = document.createElement("div");
   playhead.id = "playhead";
   playhead.className = "playhead";
+  playhead.title = "Drag to seek";
   rollEl.appendChild(playhead);
 
   rollEl.style.gridTemplateColumns = `repeat(${steps}, 64px)`;
@@ -95,10 +98,8 @@ function buildRoll() {
   }
   updateCount();
 
-  if (!playing) {
-    const playhead = $("playhead");
-    if (playhead) playhead.style.left = "0%";
-  }
+  setupPlayheadDragging();
+  if (!playing) setPlayPosition(playPositionMs, false);
 }
 
 async function ensureAudio() {
@@ -232,85 +233,179 @@ function stopPlayheadAnimation() {
   }
 }
 
+function songDurationMs() {
+  const events = getSongEvents();
+  return events.length ? events[events.length - 1].timeMs + stepDuration() * 1000 : 0;
+}
+
+function setPlayPosition(ms, follow = true) {
+  const duration = songDurationMs();
+  playTimelineDuration = duration;
+  playPositionMs = Math.max(0, Math.min(duration, Number(ms) || 0));
+
+  const playhead = $("playhead");
+  const rollWrap = $("rollWrap");
+  if (playhead) {
+    const pixelsPerStep = 64;
+    const x = stepDuration() > 0
+      ? (playPositionMs / (stepDuration() * 1000)) * pixelsPerStep
+      : 0;
+    playhead.style.left = `${x}px`;
+
+    if (follow && rollWrap) {
+      const margin = Math.min(160, rollWrap.clientWidth * 0.25);
+      const viewportLeft = rollWrap.scrollLeft;
+      const viewportRight = viewportLeft + rollWrap.clientWidth;
+      if (x < viewportLeft + margin) {
+        rollWrap.scrollLeft = Math.max(0, x - margin);
+      } else if (x > viewportRight - margin) {
+        rollWrap.scrollLeft = Math.max(0, x - rollWrap.clientWidth + margin);
+      }
+    }
+  }
+
+  setPlaybackUI(playing ? "Playing" : "Stopped", playPositionMs);
+  updateNextNote(playPositionMs);
+}
+
 function updatePlayhead(now) {
   if (!playing) return;
 
   const elapsedMs = Math.max(0, (now - playTimelineStart) * 1000);
-  const progress = playTimelineDuration
-    ? Math.min(1, elapsedMs / playTimelineDuration)
-    : 0;
+  const currentMs = Math.min(playTimelineDuration, playPositionMs + elapsedMs);
+  setPlayPosition(currentMs, true);
 
-  const playhead = $("playhead");
-  if (playhead) {
-    playhead.style.left = `${progress * 100}%`;
-  }
-
-  setPlaybackUI("Playing", elapsedMs);
-  updateNextNote(elapsedMs);
-
-  if (elapsedMs < playTimelineDuration) {
+  if (currentMs < playTimelineDuration) {
     playheadFrame = requestAnimationFrame(updatePlayhead);
   }
 }
 
-async function playSong() {
-  if (playing) return;
+function getPlaybackEventsFrom(startMs) {
+  return getSongEvents().filter(event => event.timeMs >= startMs - 0.5);
+}
+
+async function startPlaybackFrom(positionMs = 0) {
   if (!notes.size) {
     saveStateEl.textContent = "Add some notes first";
     return;
   }
 
-  try {
-    const events = getSongEvents();
-    const requiredPitches = [...new Set(events.flatMap(e => e.pitches))];
+  // Stop previous sources/timers without resetting the desired seek position.
+  if (playTimer) clearTimeout(playTimer);
+  playTimer = null;
+  stopPlayheadAnimation();
+  for (const source of activeSources) {
+    try { source.stop(); } catch (e) {}
+  }
+  activeSources.clear();
 
-    await ensureAudio();
+  const events = getSongEvents();
+  if (!events.length) return;
 
-    // Preload every sample before scheduling so playback is deterministic.
-    await Promise.all(requiredPitches.map(pitch => getBuffer(pitch)));
+  playTimelineDuration = songDurationMs();
+  playPositionMs = Math.max(0, Math.min(playTimelineDuration, positionMs));
+  const eventsToPlay = getPlaybackEventsFrom(playPositionMs);
+  const requiredPitches = [...new Set(eventsToPlay.flatMap(e => e.pitches))];
 
-    const ctx = audioContext;
-    const start = ctx.currentTime + 0.08;
+  await ensureAudio();
+  await Promise.all(requiredPitches.map(pitch => getBuffer(pitch)));
 
-    playing = true;
-    playTimelineStart = performance.now();
-    playTimelineDuration = events.length
-      ? events[events.length - 1].timeMs + stepDuration() * 1000
-      : 0;
+  const ctx = audioContext;
+  const start = ctx.currentTime + 0.08;
+  const timelineStart = playPositionMs;
 
-    // Keep the playhead timeline long enough to reach the last event.
-    setPlaybackUI("Playing", 0);
-    updateNextNote(0);
-    stopPlayheadAnimation();
-    playheadFrame = requestAnimationFrame(updatePlayhead);
+  playing = true;
+  playTimelineStart = performance.now();
+  setPlayPosition(playPositionMs, true);
+  stopPlayheadAnimation();
+  playheadFrame = requestAnimationFrame(updatePlayhead);
 
-    for (const event of events) {
-      for (const pitch of event.pitches) {
-        const velocity = notes.get(`${event.step}:${pitch}`) ?? 100;
-        await playSample(pitch, velocity, start + event.timeMs / 1000);
-      }
+  for (const event of eventsToPlay) {
+    const relativeMs = event.timeMs - timelineStart;
+    for (const pitch of event.pitches) {
+      const velocity = notes.get(`${event.step}:${pitch}`) ?? 100;
+      await playSample(pitch, velocity, start + relativeMs / 1000);
     }
+  }
 
-    const duration = (playTimelineDuration + 50) * 1000;
-    playTimer = setTimeout(() => {
-      playing = false;
-      playTimer = null;
-      stopPlayheadAnimation();
+  const remaining = Math.max(0, playTimelineDuration - playPositionMs);
+  playTimer = setTimeout(() => {
+    playing = false;
+    playTimer = null;
+    stopPlayheadAnimation();
+    playPositionMs = playTimelineDuration;
+    setPlayPosition(playTimelineDuration, true);
+    setPlaybackUI("Finished", playTimelineDuration);
+  }, remaining + 50);
+}
 
-      const playhead = $("playhead");
-      if (playhead) playhead.style.left = "100%";
-
-      setPlaybackUI("Finished", playTimelineDuration);
-      updateNextNote(Number.POSITIVE_INFINITY);
-    }, duration);
-
+async function playSong() {
+  if (playing) return;
+  try {
+    await startPlaybackFrom(playPositionMs);
   } catch (err) {
     console.error(err);
     playing = false;
     stopPlayheadAnimation();
-    setPlaybackUI("Ready", 0);
+    setPlaybackUI("Ready", playPositionMs);
     saveStateEl.textContent = `Playback error: ${err.message}`;
   }
+}
+
+function seekFromPointer(event) {
+  const rect = rollEl.getBoundingClientRect();
+  const x = Math.max(0, event.clientX - rect.left + $("rollWrap").scrollLeft);
+  const duration = songDurationMs();
+  const ms = Math.min(duration, Math.max(0, (x / 64) * stepDuration() * 1000));
+  return ms;
+}
+
+function setupPlayheadDragging() {
+  const playhead = $("playhead");
+  if (!playhead || playhead.dataset.dragReady) return;
+  playhead.dataset.dragReady = "1";
+
+  playhead.addEventListener("pointerdown", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    draggingPlayhead = true;
+    playhead.setPointerCapture(event.pointerId);
+    setPlayPosition(seekFromPointer(event), false);
+    playhead.classList.add("dragging");
+  });
+
+  playhead.addEventListener("pointermove", event => {
+    if (!draggingPlayhead) return;
+    event.preventDefault();
+    setPlayPosition(seekFromPointer(event), true);
+  });
+
+  const finishDrag = async event => {
+    if (!draggingPlayhead) return;
+    draggingPlayhead = false;
+    playhead.classList.remove("dragging");
+    try { playhead.releasePointerCapture(event.pointerId); } catch (e) {}
+
+    if (playing) {
+      try {
+        await startPlaybackFrom(playPositionMs);
+      } catch (err) {
+        console.error(err);
+        playing = false;
+        setPlaybackUI("Ready", playPositionMs);
+        saveStateEl.textContent = `Playback error: ${err.message}`;
+      }
+    }
+  };
+
+  playhead.addEventListener("pointerup", finishDrag);
+  playhead.addEventListener("pointercancel", finishDrag);
+
+  // Clicking anywhere on the timeline also seeks.
+  $("rollWrap").addEventListener("pointerdown", event => {
+    if (event.target.closest(".cell") || event.target === playhead) return;
+    setPlayPosition(seekFromPointer(event), true);
+  });
 }
 
 function stopSong() {
@@ -327,11 +422,10 @@ function stopSong() {
   }
   activeSources.clear();
 
-  const playhead = $("playhead");
-  if (playhead) playhead.style.left = "0%";
-
+  playPositionMs = 0;
+  playTimelineDuration = songDurationMs();
+  setPlayPosition(0, false);
   setPlaybackUI("Stopped", 0);
-  updateNextNote(0);
   saveStateEl.textContent = "Saved";
 }
 
