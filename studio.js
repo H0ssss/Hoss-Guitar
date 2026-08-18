@@ -234,8 +234,10 @@ function stopPlayheadAnimation() {
 }
 
 function songDurationMs() {
-  const events = getSongEvents();
-  return events.length ? events[events.length - 1].timeMs + stepDuration() * 1000 : 0;
+  // The editor timeline is the actual grid, not just the last note.
+  // This prevents playback from ending immediately when the last event is
+  // close to the beginning of a long piano-roll.
+  return Math.max(0, steps * stepDuration() * 1000);
 }
 
 function setPlayPosition(ms, follow = true) {
@@ -272,7 +274,10 @@ function updatePlayhead(now) {
   if (!playing) return;
 
   const elapsedMs = Math.max(0, (now - playTimelineStart) * 1000);
-  const currentMs = Math.min(playTimelineDuration, playPositionMs + elapsedMs);
+  const currentMs = Math.min(
+    playTimelineDuration,
+    playPositionMs + elapsedMs
+  );
   setPlayPosition(currentMs, true);
 
   if (currentMs < playTimelineDuration) {
@@ -290,10 +295,10 @@ async function startPlaybackFrom(positionMs = 0) {
     return;
   }
 
-  // Stop previous sources/timers without resetting the desired seek position.
   if (playTimer) clearTimeout(playTimer);
   playTimer = null;
   stopPlayheadAnimation();
+
   for (const source of activeSources) {
     try { source.stop(); } catch (e) {}
   }
@@ -303,8 +308,19 @@ async function startPlaybackFrom(positionMs = 0) {
   if (!events.length) return;
 
   playTimelineDuration = songDurationMs();
-  playPositionMs = Math.max(0, Math.min(playTimelineDuration, positionMs));
-  const eventsToPlay = getPlaybackEventsFrom(playPositionMs);
+
+  // If we're already at the end, starting Play should restart from zero.
+  if (positionMs >= playTimelineDuration - 1) {
+    positionMs = 0;
+  }
+
+  playPositionMs = Math.max(0, Math.min(playTimelineDuration, Number(positionMs) || 0));
+
+  const eventsToPlay = events.filter(
+    event => event.timeMs >= playPositionMs - 0.5 &&
+             event.timeMs < playTimelineDuration
+  );
+
   const requiredPitches = [...new Set(eventsToPlay.flatMap(e => e.pitches))];
 
   await ensureAudio();
@@ -314,35 +330,51 @@ async function startPlaybackFrom(positionMs = 0) {
   const start = ctx.currentTime + 0.08;
   const timelineStart = playPositionMs;
 
+  // IMPORTANT: set the state BEFORE starting the animation.
   playing = true;
   playTimelineStart = performance.now();
+
   setPlayPosition(playPositionMs, true);
+  updateNextNote(playPositionMs);
   stopPlayheadAnimation();
   playheadFrame = requestAnimationFrame(updatePlayhead);
 
+  // Schedule every note immediately. We NEVER await an 11-second sample.
   for (const event of eventsToPlay) {
-    const relativeMs = event.timeMs - timelineStart;
+    const relativeSeconds = Math.max(0, event.timeMs - timelineStart) / 1000;
+
     for (const pitch of event.pitches) {
       const velocity = notes.get(`${event.step}:${pitch}`) ?? 100;
-      playSample(pitch, velocity, start + relativeMs / 1000);
+      playSample(pitch, velocity, start + relativeSeconds);
     }
   }
 
+  // The timer follows the editor timeline, NOT sample duration.
   const remaining = Math.max(0, playTimelineDuration - playPositionMs);
+
   playTimer = setTimeout(() => {
+    if (!playing) return;
+
     playing = false;
     playTimer = null;
     stopPlayheadAnimation();
+
     playPositionMs = playTimelineDuration;
     setPlayPosition(playTimelineDuration, true);
+    updateNextNote(Number.POSITIVE_INFINITY);
     setPlaybackUI("Finished", playTimelineDuration);
-  }, remaining + 50);
+  }, remaining + 80);
 }
 
 async function playSong() {
   if (playing) return;
+
+  // If the previous run reached the end, Play means "play from beginning".
+  const startPosition =
+    playPositionMs >= songDurationMs() - 1 ? 0 : playPositionMs;
+
   try {
-    await startPlaybackFrom(playPositionMs);
+    await startPlaybackFrom(startPosition);
   } catch (err) {
     console.error(err);
     playing = false;
@@ -406,6 +438,32 @@ function setupPlayheadDragging() {
     if (event.target.closest(".cell") || event.target === playhead) return;
     setPlayPosition(seekFromPointer(event), true);
   });
+}
+
+function pauseSong() {
+  if (!playing) return;
+
+  // Freeze the current playhead position.
+  const elapsedMs = Math.max(0, (performance.now() - playTimelineStart) * 1000);
+  playPositionMs = Math.min(
+    playTimelineDuration,
+    playPositionMs + elapsedMs
+  );
+
+  playing = false;
+
+  if (playTimer) clearTimeout(playTimer);
+  playTimer = null;
+  stopPlayheadAnimation();
+
+  for (const source of activeSources) {
+    try { source.stop(); } catch (e) {}
+  }
+  activeSources.clear();
+
+  setPlayPosition(playPositionMs, true);
+  setPlaybackUI("Paused", playPositionMs);
+  updateNextNote(playPositionMs);
 }
 
 function stopSong() {
@@ -754,6 +812,7 @@ function download(data, filename, type="application/octet-stream") {
 
 $("play").onclick = playSong;
 $("stop").onclick = stopSong;
+$("pause").onclick = pauseSong;
 
 $("clear").onclick = () => {
   if (!confirm("Clear this project?")) return;
