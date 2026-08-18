@@ -18,6 +18,12 @@ const bufferPromises = new Map();
 let playTimer = null;
 let playing = false;
 let playStart = 0;
+let playPositionMs = 0;
+
+// Zoom must exist BEFORE buildRoll() because buildRoll() uses it.
+let hossZoom = 1;
+const HOSS_BASE_CELL_WIDTH = 64;
+
 const activeSources = new Set();
 
 const $ = id => document.getElementById(id);
@@ -45,7 +51,15 @@ function updateCount() {
 function buildRoll() {
   keysEl.innerHTML = "";
   rollEl.innerHTML = "";
-  rollEl.style.gridTemplateColumns = `repeat(${steps}, ${Math.round(64 * hossZoom)}px)`;
+
+  // buildRoll clears the roll, so recreate the playhead every time.
+  const playhead = document.createElement("div");
+  playhead.id = "playhead";
+  playhead.className = "playhead";
+  rollEl.appendChild(playhead);
+
+  rollEl.style.gridTemplateColumns =
+    `repeat(${steps}, ${Math.round(HOSS_BASE_CELL_WIDTH * hossZoom)}px)`;
 
   for (let pitch = currentGuitar.high; pitch >= currentGuitar.low; pitch--) {
     const key = document.createElement("div");
@@ -83,6 +97,7 @@ function buildRoll() {
     }
   }
   updateCount();
+  hossApplyZoom();
 }
 
 async function ensureAudio() {
@@ -834,20 +849,12 @@ requestAnimationFrame(hossWatchPlayback);
 $("pause").onclick = hossPauseResume;
 
 
-let hossZoom = 1;
-const HOSS_BASE_CELL_WIDTH = 64;
-
 function hossApplyZoom() {
   const roll = document.getElementById("roll");
   if (!roll) return;
 
   const width = Math.round(HOSS_BASE_CELL_WIDTH * hossZoom);
   roll.style.gridTemplateColumns = `repeat(${steps}, ${width}px)`;
-
-  document.querySelectorAll("#roll .cell").forEach(cell => {
-    cell.style.width = `${width}px`;
-    cell.style.minWidth = `${width}px`;
-  });
 
   const label = document.getElementById("zoomValue");
   if (label) label.textContent = `${Math.round(hossZoom * 100)}%`;
@@ -868,6 +875,8 @@ function hossZoomOut() {
 
 const zoomInBtn = document.getElementById("zoomIn");
 const zoomOutBtn = document.getElementById("zoomOut");
-if (zoomInBtn) zoomInBtn.onclick = hossZoomIn;
-if (zoomOutBtn) zoomOutBtn.onclick = hossZoomOut;
+
+if (zoomInBtn) zoomInBtn.addEventListener("click", hossZoomIn);
+if (zoomOutBtn) zoomOutBtn.addEventListener("click", hossZoomOut);
+
 hossApplyZoom();

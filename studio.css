@@ -124,3 +124,27 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .zoom{display:flex;align-items:center;gap:6px;white-space:nowrap}
 .zoom button{min-width:32px;padding:7px 11px}
 #zoomValue{min-width:52px;text-align:center;font-variant-numeric:tabular-nums}
+
+/* V4 editor zoom + scrolling */
+.roll-wrap {
+  overflow-x: auto !important;
+  overflow-y: auto !important;
+  max-height: 650px;
+}
+.zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+}
+.zoom button {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  font-size: 18px;
+}
+#zoomValue {
+  min-width: 52px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
