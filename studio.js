@@ -149,22 +149,21 @@ function stepDuration() {
   return 60 / bpm / 4; // 16th note
 }
 
-async 
-// ===== Visual playback indicator =====
-// This layer does NOT control audio. It only follows the existing working
-// playback engine, so adding the playhead cannot break sample playback.
-let indicatorFrame = null;
-let indicatorStartWall = 0;
-let indicatorStartMs = 0;
-let indicatorDurationMs = 0;
+// ============================================================
+// VISUAL PLAYBACK INDICATOR ONLY
+// The audio engine below is intentionally left unchanged.
+// ============================================================
+let hossIndicatorFrame = null;
+let hossIndicatorStartedAt = 0;
+let hossIndicatorStartMs = 0;
+let hossIndicatorDuration = 1;
 
-function indicatorFormatTime(ms) {
-  ms = Math.max(0, Number(ms) || 0);
-  const total = Math.floor(ms / 1000);
+function hossFmt(ms) {
+  const total = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-function indicatorEvents() {
+function hossEvents() {
   const stepMs = stepDuration() * 1000;
   const map = new Map();
 
@@ -177,35 +176,12 @@ function indicatorEvents() {
   return [...map.entries()]
     .map(([step, pitches]) => ({
       time: step * stepMs,
-      pitches: [...new Set(pitches)].sort((a, b) => b - a)
+      pitches: [...new Set(pitches)]
     }))
     .sort((a, b) => a.time - b.time);
 }
 
-function indicatorSetState(state, currentMs) {
-  const stateEl = document.getElementById("playbackState");
-  const timeEl = document.getElementById("playbackTime");
-  const dot = document.getElementById("playbackDot");
-
-  if (stateEl) stateEl.textContent = state;
-  if (timeEl) {
-    timeEl.textContent =
-      `${indicatorFormatTime(currentMs)} / ${indicatorFormatTime(indicatorDurationMs)}`;
-  }
-  if (dot) dot.classList.toggle("playing", state === "Playing");
-}
-
-function indicatorNext(currentMs) {
-  const el = document.getElementById("nextNote");
-  if (!el) return;
-
-  const next = indicatorEvents().find(e => e.time >= currentMs - 2);
-  el.textContent = next
-    ? next.pitches.map(p => midiToName(p)).join(" + ")
-    : "—";
-}
-
-function indicatorEnsurePlayhead() {
+function hossIndicatorEnsureLine() {
   const roll = document.getElementById("roll");
   if (!roll) return null;
 
@@ -219,62 +195,86 @@ function indicatorEnsurePlayhead() {
   return line;
 }
 
-function indicatorSetPosition(ms) {
-  const line = indicatorEnsurePlayhead();
+function hossIndicatorPosition(ms) {
+  const line = hossIndicatorEnsureLine();
   if (!line) return;
 
-  const total = Math.max(1, indicatorDurationMs);
-  const percent = Math.max(0, Math.min(100, (ms / total) * 100));
-  line.style.left = `${percent}%`;
+  const pct = Math.max(
+    0,
+    Math.min(100, (ms / Math.max(1, hossIndicatorDuration)) * 100)
+  );
+  line.style.left = `${pct}%`;
 }
 
-function updateStudioIndicator(now) {
-  if (!playing) return;
+function hossIndicatorUI(state, ms) {
+  const stateEl = document.getElementById("playbackState");
+  const timeEl = document.getElementById("playbackTime");
+  const dot = document.getElementById("playbackDot");
 
-  const elapsed = Math.max(0, performance.now() - indicatorStartWall);
-  const current = Math.min(
-    indicatorDurationMs,
-    indicatorStartMs + elapsed
-  );
+  if (stateEl) stateEl.textContent = state;
+  if (timeEl) {
+    timeEl.textContent =
+      `${hossFmt(ms)} / ${hossFmt(hossIndicatorDuration)}`;
+  }
+  if (dot) dot.classList.toggle("playing", state === "Playing");
 
-  indicatorSetPosition(current);
-  indicatorSetState("Playing", current);
-  indicatorNext(current);
-
-  if (current < indicatorDurationMs && playing) {
-    indicatorFrame = requestAnimationFrame(updateStudioIndicator);
+  const nextEl = document.getElementById("nextNote");
+  if (nextEl) {
+    const next = hossEvents().find(e => e.time >= ms - 2);
+    nextEl.textContent = next
+      ? next.pitches.map(p => midiToName(p)).join(" + ")
+      : "—";
   }
 }
 
-function startStudioIndicator(startMs = 0) {
-  cancelAnimationFrame(indicatorFrame);
+function hossIndicatorTick() {
+  if (!playing) return;
 
-  indicatorDurationMs = Math.max(
-    1,
-    steps * stepDuration() * 1000
+  const elapsed = Math.max(0, performance.now() - hossIndicatorStartedAt);
+  const current = Math.min(
+    hossIndicatorDuration,
+    hossIndicatorStartMs + elapsed
   );
 
-  indicatorStartMs = Math.max(0, Math.min(indicatorDurationMs, startMs));
-  indicatorStartWall = performance.now();
+  hossIndicatorPosition(current);
+  hossIndicatorUI("Playing", current);
 
-  indicatorSetPosition(indicatorStartMs);
-  indicatorSetState("Playing", indicatorStartMs);
-  indicatorNext(indicatorStartMs);
-
-  indicatorFrame = requestAnimationFrame(updateStudioIndicator);
+  if (current < hossIndicatorDuration && playing) {
+    hossIndicatorFrame = requestAnimationFrame(hossIndicatorTick);
+  }
 }
 
-function stopStudioIndicator(state = "Stopped", ms = 0) {
-  cancelAnimationFrame(indicatorFrame);
-  indicatorFrame = null;
+function hossIndicatorStart(startMs = 0) {
+  cancelAnimationFrame(hossIndicatorFrame);
 
-  indicatorDurationMs = Math.max(1, steps * stepDuration() * 1000);
-  indicatorSetPosition(ms);
-  indicatorSetState(state, ms);
-  indicatorNext(ms);
+  hossIndicatorDuration =
+    Math.max(1, steps * stepDuration() * 1000);
+
+  hossIndicatorStartMs = Math.max(
+    0,
+    Math.min(hossIndicatorDuration, startMs)
+  );
+  hossIndicatorStartedAt = performance.now();
+
+  hossIndicatorPosition(hossIndicatorStartMs);
+  hossIndicatorUI("Playing", hossIndicatorStartMs);
+
+  hossIndicatorFrame = requestAnimationFrame(hossIndicatorTick);
 }
 
-function playSong() {
+function hossIndicatorStop(state = "Stopped", ms = 0) {
+  cancelAnimationFrame(hossIndicatorFrame);
+  hossIndicatorFrame = null;
+
+  hossIndicatorDuration =
+    Math.max(1, steps * stepDuration() * 1000);
+
+  hossIndicatorPosition(ms);
+  hossIndicatorUI(state, ms);
+}
+
+
+async function playSong() {
   if (playing || notes.size === 0) return;
 
   try {
@@ -738,28 +738,18 @@ for (let p = currentGuitar.low; p <= currentGuitar.high; p++) {
 buildRoll();
 loadAutoSave();
 
+// Start the visual indicator when the existing audio engine enters Playing.
+let hossIndicatorWatcher = null;
+let hossLastPlaying = false;
 
-// Wrap the existing audio functions. The original audio implementation stays
-// untouched; these wrappers only update the visual indicator.
-const _workingPlaySong = playSong;
-playSong = async function() {
-  const result = await _workingPlaySong.apply(this, arguments);
-  if (playing) {
-    startStudioIndicator(0);
+function hossWatchPlayback() {
+  if (playing && !hossLastPlaying) {
+    hossIndicatorStart(0);
+  } else if (!playing && hossLastPlaying) {
+    hossIndicatorStop("Stopped", 0);
   }
-  return result;
-};
+  hossLastPlaying = playing;
+  hossIndicatorWatcher = requestAnimationFrame(hossWatchPlayback);
+}
 
-const _workingStopSong = stopSong;
-stopSong = function() {
-  const result = _workingStopSong.apply(this, arguments);
-  stopStudioIndicator("Stopped", 0);
-  return result;
-};
-
-
-setTimeout(() => {
-  if (document.getElementById("playbackState") && !playing) {
-    stopStudioIndicator("Ready", 0);
-  }
-}, 0);
+requestAnimationFrame(hossWatchPlayback);
