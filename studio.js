@@ -205,6 +205,49 @@ function hossEvents() {
     .sort((a, b) => a.time - b.time);
 }
 
+function hossSeekToMs(ms, resumeIfPlaying = false) {
+  const duration = Math.max(1, songDurationMs());
+  const target = Math.max(0, Math.min(duration, Number(ms) || 0));
+
+  const wasPlaying = playing;
+
+  if (wasPlaying) {
+    // Stop current scheduled sources before seeking.
+    playing = false;
+    if (playTimer) {
+      clearTimeout(playTimer);
+      playTimer = null;
+    }
+    for (const source of activeSources) {
+      try { source.stop(); } catch (e) {}
+    }
+    activeSources.clear();
+  }
+
+  playPositionMs = target;
+  hossIndicatorStop(wasPlaying || resumeIfPlaying ? "Playing" : "Ready", target);
+
+  if (wasPlaying || resumeIfPlaying) {
+    // Restart the working audio engine from the exact dragged position.
+    playSong(target);
+  }
+}
+
+function hossPointerToMs(event) {
+  const rollWrap = document.querySelector(".roll-wrap");
+  const roll = document.getElementById("roll");
+  if (!rollWrap || !roll) return 0;
+
+  const rect = roll.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const usableWidth = Math.max(1, roll.scrollWidth);
+
+  return Math.max(
+    0,
+    Math.min(songDurationMs(), (x / usableWidth) * songDurationMs())
+  );
+}
+
 function hossIndicatorEnsureLine() {
   const roll = document.getElementById("roll");
   if (!roll) return null;
@@ -905,3 +948,62 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 window.addEventListener('load', () => hossApplyZoom());
+
+function hossBindPlayheadSeek() {
+  const rollWrap = document.querySelector(".roll-wrap");
+  if (!rollWrap || rollWrap.dataset.seekBound === "1") return;
+
+  rollWrap.dataset.seekBound = "1";
+  let dragging = false;
+
+  const seekFromEvent = (event, resumeAfter) => {
+    const rect = rollWrap.getBoundingClientRect();
+    const x = event.clientX - rect.left + rollWrap.scrollLeft;
+    const totalWidth = Math.max(1, rollWrap.scrollWidth);
+    const target = Math.max(
+      0,
+      Math.min(songDurationMs(), (x / totalWidth) * songDurationMs())
+    );
+    hossSeekToMs(target, resumeAfter);
+  };
+
+  rollWrap.addEventListener("pointerdown", event => {
+    const line = document.getElementById("playhead");
+    const lineRect = line ? line.getBoundingClientRect() : null;
+
+    // Clicking anywhere on the timeline seeks. Clicking/dragging the red
+    // playhead has the same behavior.
+    dragging = true;
+    rollWrap.setPointerCapture?.(event.pointerId);
+    seekFromEvent(event, false);
+  });
+
+  rollWrap.addEventListener("pointermove", event => {
+    if (!dragging) return;
+    // During dragging, don't repeatedly restart audio. Just move the cursor.
+    const rect = rollWrap.getBoundingClientRect();
+    const x = event.clientX - rect.left + rollWrap.scrollLeft;
+    const totalWidth = Math.max(1, rollWrap.scrollWidth);
+    const target = Math.max(
+      0,
+      Math.min(songDurationMs(), (x / totalWidth) * songDurationMs())
+    );
+    playPositionMs = target;
+    hossIndicatorStop(playing ? "Playing" : "Ready", target);
+  });
+
+  rollWrap.addEventListener("pointerup", event => {
+    if (!dragging) return;
+    dragging = false;
+    const resume = playing;
+    seekFromEvent(event, resume);
+  });
+
+  rollWrap.addEventListener("pointercancel", () => {
+    dragging = false;
+  });
+}
+
+window.addEventListener("load", () => {
+  hossBindPlayheadSeek();
+});

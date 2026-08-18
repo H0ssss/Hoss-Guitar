@@ -181,3 +181,15 @@ button:disabled{opacity:.4;cursor:not-allowed}
   overflow-y: auto !important;
   max-height: 70vh !important;
 }
+
+/* Keep pitch labels aligned with the zoomed cells */
+#keys {
+  overflow: hidden;
+}
+#keys > * {
+  box-sizing: border-box;
+}
+.playhead {
+  cursor: ew-resize;
+  pointer-events: auto;
+}
