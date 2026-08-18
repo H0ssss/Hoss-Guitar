@@ -195,6 +195,24 @@ function hossIndicatorEnsureLine() {
   return line;
 }
 
+
+function hossFollowPlayhead(ms) {
+  const rollWrap = document.getElementById("rollWrap") || document.querySelector(".roll-wrap");
+  const roll = document.getElementById("roll");
+  const line = document.getElementById("playhead");
+  if (!rollWrap || !roll || !line) return;
+
+  const totalMs = Math.max(1, hossIndicatorDuration);
+  const x = (ms / totalMs) * roll.scrollWidth;
+
+  const target = x - rollWrap.clientWidth * 0.55;
+  rollWrap.scrollLeft = Math.max(0, Math.min(
+    Math.max(0, roll.scrollWidth - rollWrap.clientWidth),
+    target
+  ));
+}
+
+
 function hossIndicatorPosition(ms) {
   const line = hossIndicatorEnsureLine();
   if (!line) return;
@@ -204,6 +222,7 @@ function hossIndicatorPosition(ms) {
     Math.min(100, (ms / Math.max(1, hossIndicatorDuration)) * 100)
   );
   line.style.left = `${pct}%`;
+  hossFollowPlayhead(ms);
 }
 
 function hossIndicatorUI(state, ms) {
@@ -263,6 +282,8 @@ function hossIndicatorStart(startMs = 0) {
 }
 
 function hossIndicatorStop(state = "Stopped", ms = 0) {
+  const pauseBtn = document.getElementById("pause");
+  if (pauseBtn) pauseBtn.textContent = "⏸ Pause";
   cancelAnimationFrame(hossIndicatorFrame);
   hossIndicatorFrame = null;
 
@@ -273,6 +294,39 @@ function hossIndicatorStop(state = "Stopped", ms = 0) {
   hossIndicatorUI(state, ms);
 }
 
+
+
+function hossPauseResume() {
+  if (playing) {
+    // Freeze the current audio position and stop currently playing sources.
+    const now = audioContext ? audioContext.currentTime : 0;
+    const elapsedMs = playStart
+      ? Math.max(0, (now - playStart) * 1000)
+      : 0;
+
+    playPositionMs = Math.max(0, Math.min(songDurationMs(), elapsedMs));
+    playing = false;
+
+    if (playTimer) clearTimeout(playTimer);
+    playTimer = null;
+
+    for (const source of activeSources) {
+      try { source.stop(); } catch (e) {}
+    }
+    activeSources.clear();
+
+    const btn = document.getElementById("pause");
+    if (btn) btn.textContent = "▶ Resume";
+    hossIndicatorStop("Paused", playPositionMs);
+    saveStateEl.textContent = "Paused";
+  } else {
+    const btn = document.getElementById("pause");
+    if (btn) btn.textContent = "⏸ Pause";
+
+    // Resume from the current editor position.
+    playSong();
+  }
+}
 
 async function playSong() {
   if (playing || notes.size === 0) return;
@@ -490,7 +544,7 @@ function importHossText() {
     steps = Math.max(16, Math.ceil((maxStep + 1) / 16) * 16);
 
     // Allow long songs while keeping the normal zoom controls useful.
-    steps = Math.min(256, steps);
+    steps = Math.max(16, steps);
 
     buildRoll();
     autoSave();
@@ -753,3 +807,5 @@ function hossWatchPlayback() {
 }
 
 requestAnimationFrame(hossWatchPlayback);
+
+$("pause").onclick = hossPauseResume;

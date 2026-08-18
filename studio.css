@@ -85,3 +85,15 @@ button:disabled{opacity:.4;cursor:not-allowed}
 #roll{position:relative}
 .playhead{position:absolute;z-index:50;top:0;bottom:0;left:0;width:2px;pointer-events:none;background:#ff4d67;box-shadow:0 0 7px rgba(255,77,103,.8)}
 .playhead::before{content:"";position:absolute;top:0;left:-5px;width:12px;height:8px;border-radius:2px;background:#ff4d67}
+
+.roll-wrap{
+  overflow-x:auto;
+  overflow-y:hidden;
+  position:relative;
+}
+#roll{
+  min-width:max-content;
+}
+#pause{
+  min-width:96px;
+}
