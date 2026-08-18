@@ -21,6 +21,8 @@ let playTimelineStart = 0;
 let playTimelineDuration = 0;
 let playPositionMs = 0;
 let playAnchorPositionMs = 0;
+let audioPlayStartTime = 0;       // AudioContext time where this run begins
+let audioTimelineStartMs = 0;     // editor position represented by audioPlayStartTime
 let draggingPlayhead = false;
 let playing = false;
 let playStart = 0;
@@ -164,6 +166,29 @@ async function playSample(pitch, velocity=100, when=null) {
   }
 }
 
+function scheduleSampleNow(pitch, velocity, when) {
+  const ctx = audioContext;
+  const name = midiToName(pitch);
+  const buffer = bufferCache.get(name);
+
+  if (!ctx || !buffer) {
+    throw new Error(`Sample buffer not ready: ${name}.ogg`);
+  }
+
+  const source = ctx.createBufferSource();
+  const gain = ctx.createGain();
+
+  source.buffer = buffer;
+  gain.gain.value = Math.max(0.05, Math.min(1, velocity / 127));
+  source.connect(gain).connect(ctx.destination);
+
+  activeSources.add(source);
+  source.onended = () => activeSources.delete(source);
+
+  source.start(Math.max(when, ctx.currentTime));
+  return source;
+}
+
 function stepDuration() {
   return 60 / bpm / 4; // 16th note
 }
@@ -271,23 +296,32 @@ function setPlayPosition(ms, follow = true) {
   updateNextNote(playPositionMs);
 }
 
-function updatePlayhead(now) {
-  if (!playing) return;
+function updatePlayhead() {
+  if (!playing || !audioContext) return;
 
-  // IMPORTANT: calculate from the fixed position where this playback run
-  // started. Do NOT use playPositionMs here because setPlayPosition() updates
-  // it every animation frame. Using both caused exponential/accelerated
-  // movement to the end.
-  const elapsedMs = Math.max(0, (now - playTimelineStart) * 1000);
+  // Web Audio's clock is the source of truth for an audio editor.
+  // requestAnimationFrame is ONLY used to draw the UI.
+  const elapsedMs = Math.max(
+    0,
+    (audioContext.currentTime - audioPlayStartTime) * 1000
+  );
+
   const currentMs = Math.min(
     playTimelineDuration,
-    playAnchorPositionMs + elapsedMs
+    audioTimelineStartMs + elapsedMs
   );
 
   setPlayPosition(currentMs, true);
 
-  if (currentMs < playTimelineDuration) {
+  if (currentMs < playTimelineDuration && playing) {
     playheadFrame = requestAnimationFrame(updatePlayhead);
+  } else if (playing) {
+    playing = false;
+    playheadFrame = null;
+    playPositionMs = playTimelineDuration;
+    setPlayPosition(playTimelineDuration, true);
+    updateNextNote(Number.POSITIVE_INFINITY);
+    setPlaybackUI("Finished", playTimelineDuration);
   }
 }
 
@@ -315,69 +349,57 @@ async function startPlaybackFrom(positionMs = 0) {
 
   playTimelineDuration = songDurationMs();
 
-  // If we're already at the end, starting Play should restart from zero.
-  if (positionMs >= playTimelineDuration - 1) {
-    positionMs = 0;
-  }
-
-  playPositionMs = Math.max(0, Math.min(playTimelineDuration, Number(positionMs) || 0));
-  playAnchorPositionMs = playPositionMs;
+  positionMs = Number(positionMs) || 0;
+  if (positionMs >= playTimelineDuration - 1) positionMs = 0;
+  positionMs = Math.max(0, Math.min(playTimelineDuration, positionMs));
 
   const eventsToPlay = events.filter(
-    event => event.timeMs >= playPositionMs - 0.5 &&
+    event => event.timeMs >= positionMs - 0.5 &&
              event.timeMs < playTimelineDuration
   );
 
   const requiredPitches = [...new Set(eventsToPlay.flatMap(e => e.pitches))];
 
-  await ensureAudio();
+  // User gesture -> resume AudioContext before scheduling.
+  const ctx = await ensureAudio();
+
+  // Decode everything BEFORE starting the timeline.
   await Promise.all(requiredPitches.map(pitch => getBuffer(pitch)));
 
-  const ctx = audioContext;
-  const start = ctx.currentTime + 0.08;
-  const timelineStart = playPositionMs;
+  // From this point onward, timing is entirely controlled by AudioContext.
+  const startDelay = 0.10;
+  audioPlayStartTime = ctx.currentTime + startDelay;
+  audioTimelineStartMs = positionMs;
 
-  // IMPORTANT: set the state BEFORE starting the animation.
+  playPositionMs = positionMs;
+  playAnchorPositionMs = positionMs;
   playing = true;
-  playTimelineStart = performance.now();
 
-  setPlayPosition(playPositionMs, true);
-  updateNextNote(playPositionMs);
+  setPlayPosition(positionMs, true);
+  setPlaybackUI("Playing", positionMs);
+  updateNextNote(positionMs);
+
   stopPlayheadAnimation();
   playheadFrame = requestAnimationFrame(updatePlayhead);
 
-  // Schedule every note immediately. We NEVER await an 11-second sample.
+  // Schedule ALL notes against the same AudioContext clock.
   for (const event of eventsToPlay) {
-    const relativeSeconds = Math.max(0, event.timeMs - timelineStart) / 1000;
+    const when = audioPlayStartTime +
+      Math.max(0, event.timeMs - positionMs) / 1000;
 
     for (const pitch of event.pitches) {
       const velocity = notes.get(`${event.step}:${pitch}`) ?? 100;
-      playSample(pitch, velocity, start + relativeSeconds);
+      scheduleSampleNow(pitch, velocity, when);
     }
   }
 
-  // The timer follows the editor timeline, NOT sample duration.
-  const remaining = Math.max(0, playTimelineDuration - playPositionMs);
-
-  playTimer = setTimeout(() => {
-    if (!playing) return;
-
-    playing = false;
-    playTimer = null;
-    stopPlayheadAnimation();
-
-    playPositionMs = playTimelineDuration;
-    playAnchorPositionMs = playPositionMs;
-    setPlayPosition(playTimelineDuration, true);
-    updateNextNote(Number.POSITIVE_INFINITY);
-    setPlaybackUI("Finished", playTimelineDuration);
-  }, remaining + 80);
+  // Do not use the JS clock to determine when the song finishes.
+  // The animation loop watches the same audio clock as the scheduled notes.
 }
 
 async function playSong() {
   if (playing) return;
 
-  // If the previous run reached the end, Play means "play from beginning".
   const startPosition =
     playPositionMs >= songDurationMs() - 1 ? 0 : playPositionMs;
 
@@ -451,17 +473,16 @@ function setupPlayheadDragging() {
 function pauseSong() {
   if (!playing) return;
 
-  // Freeze the current playhead position.
-  const elapsedMs = Math.max(0, (performance.now() - playTimelineStart) * 1000);
+  const elapsedMs = audioContext
+    ? Math.max(0, (audioContext.currentTime - audioPlayStartTime) * 1000)
+    : 0;
+
   playPositionMs = Math.min(
     playTimelineDuration,
-    playAnchorPositionMs + elapsedMs
+    audioTimelineStartMs + elapsedMs
   );
 
   playing = false;
-
-  if (playTimer) clearTimeout(playTimer);
-  playTimer = null;
   stopPlayheadAnimation();
 
   for (const source of activeSources) {
