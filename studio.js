@@ -20,6 +20,7 @@ let playheadFrame = null;
 let playTimelineStart = 0;
 let playTimelineDuration = 0;
 let playPositionMs = 0;
+let playAnchorPositionMs = 0;
 let draggingPlayhead = false;
 let playing = false;
 let playStart = 0;
@@ -273,11 +274,16 @@ function setPlayPosition(ms, follow = true) {
 function updatePlayhead(now) {
   if (!playing) return;
 
+  // IMPORTANT: calculate from the fixed position where this playback run
+  // started. Do NOT use playPositionMs here because setPlayPosition() updates
+  // it every animation frame. Using both caused exponential/accelerated
+  // movement to the end.
   const elapsedMs = Math.max(0, (now - playTimelineStart) * 1000);
   const currentMs = Math.min(
     playTimelineDuration,
-    playPositionMs + elapsedMs
+    playAnchorPositionMs + elapsedMs
   );
+
   setPlayPosition(currentMs, true);
 
   if (currentMs < playTimelineDuration) {
@@ -315,6 +321,7 @@ async function startPlaybackFrom(positionMs = 0) {
   }
 
   playPositionMs = Math.max(0, Math.min(playTimelineDuration, Number(positionMs) || 0));
+  playAnchorPositionMs = playPositionMs;
 
   const eventsToPlay = events.filter(
     event => event.timeMs >= playPositionMs - 0.5 &&
@@ -360,6 +367,7 @@ async function startPlaybackFrom(positionMs = 0) {
     stopPlayheadAnimation();
 
     playPositionMs = playTimelineDuration;
+    playAnchorPositionMs = playPositionMs;
     setPlayPosition(playTimelineDuration, true);
     updateNextNote(Number.POSITIVE_INFINITY);
     setPlaybackUI("Finished", playTimelineDuration);
@@ -447,7 +455,7 @@ function pauseSong() {
   const elapsedMs = Math.max(0, (performance.now() - playTimelineStart) * 1000);
   playPositionMs = Math.min(
     playTimelineDuration,
-    playPositionMs + elapsedMs
+    playAnchorPositionMs + elapsedMs
   );
 
   playing = false;
@@ -481,6 +489,7 @@ function stopSong() {
   activeSources.clear();
 
   playPositionMs = 0;
+  playAnchorPositionMs = 0;
   playTimelineDuration = songDurationMs();
   setPlayPosition(0, false);
   setPlaybackUI("Stopped", 0);
