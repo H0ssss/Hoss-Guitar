@@ -27,10 +27,6 @@ const rollEl = $("roll");
 const keysEl = $("keys");
 const noteCountEl = $("noteCount");
 const saveStateEl = $("saveState");
-const midiFileEl = $("midiFile");
-const midiTrackEl = $("midiTrack");
-const midiTrackInfoEl = $("midiTrackInfo");
-let importedMidiTracks = [];
 
 function midiToName(midi) {
   const octave = Math.floor(midi / 12) - 1;
@@ -40,287 +36,6 @@ function midiToName(midi) {
 function fileForNote(noteName) {
   // Filenames are expected to be exactly A#1.ogg, C4.ogg, etc.
   return `${currentGuitar.folder}/${encodeURIComponent(noteName)}.ogg`;
-}
-
-
-function readU16(data, pos) {
-  return { value: (data[pos] << 8) | data[pos + 1], pos: pos + 2 };
-}
-
-function readU32(data, pos) {
-  return { value: ((data[pos] * 0x1000000) + (data[pos+1] << 16) + (data[pos+2] << 8) + data[pos+3]), pos: pos + 4 };
-}
-
-function readVLQ(data, pos) {
-  let value = 0, count = 0, b;
-  do {
-    if (pos >= data.length || count++ > 4) throw new Error("Invalid MIDI variable-length value");
-    b = data[pos++];
-    value = (value << 7) | (b & 0x7f);
-  } while (b & 0x80);
-  return { value, pos };
-}
-
-function ascii(data, pos, length) {
-  return String.fromCharCode(...data.slice(pos, pos + length));
-}
-
-function parseMidi(arrayBuffer) {
-  const data = new Uint8Array(arrayBuffer);
-  if (ascii(data, 0, 4) !== "MThd") throw new Error("This is not a valid MIDI file");
-
-  let r = readU32(data, 4);
-  const headerLength = r.value;
-  let pos = r.pos;
-  const fmt = readU16(data, pos); pos = fmt.pos;
-  const tracksCount = readU16(data, pos); pos = tracksCount.pos;
-  const div = readU16(data, pos); pos = div.pos;
-
-  if (div.value & 0x8000) throw new Error("SMPTE MIDI timing is not supported yet");
-  const ticksPerBeat = div.value;
-  pos = 8 + headerLength;
-
-  const tracks = [];
-  const tempoChanges = [{ tick: 0, micros: 500000 }];
-
-  for (let trackIndex = 0; trackIndex < tracksCount; trackIndex++) {
-    if (ascii(data, pos, 4) !== "MTrk") throw new Error("Invalid MIDI track chunk");
-    const len = readU32(data, pos + 4).value;
-    let p = pos + 8;
-    const end = p + len;
-    let tick = 0;
-    let runningStatus = null;
-    const active = new Map();
-    const trackNotes = [];
-    let trackName = `Track ${trackIndex + 1}`;
-
-    while (p < end) {
-      const dt = readVLQ(data, p); tick += dt.value; p = dt.pos;
-      let status = data[p];
-      if (status < 0x80) {
-        if (runningStatus === null) throw new Error("Invalid MIDI running status");
-        status = runningStatus;
-      } else {
-        p++;
-        if (status < 0xF0) runningStatus = status;
-      }
-
-      if (status === 0xFF) {
-        const type = data[p++];
-        const l = readVLQ(data, p); p = l.pos;
-        const bytes = data.slice(p, p + l.value);
-        if (type === 0x03 && bytes.length) trackName = new TextDecoder().decode(bytes);
-        if (type === 0x51 && bytes.length === 3) {
-          const micros = (bytes[0] << 16) | (bytes[1] << 8) | bytes[2];
-          tempoChanges.push({ tick, micros });
-        }
-        p += l.value;
-        if (type === 0x2F) break;
-        continue;
-      }
-
-      if (status === 0xF0 || status === 0xF7) {
-        const l = readVLQ(data, p); p = l.pos + l.value;
-        runningStatus = null;
-        continue;
-      }
-
-      const type = status & 0xF0;
-      if (type === 0xC0 || type === 0xD0) {
-        p += 1;
-        continue;
-      }
-      if (p + 1 >= end) break;
-      const note = data[p++];
-      const value = data[p++];
-
-      if (type === 0x90 && value > 0) {
-        const key = note;
-        if (!active.has(key)) active.set(key, []);
-        active.get(key).push({ tick, velocity: value });
-      } else if (type === 0x80 || (type === 0x90 && value === 0)) {
-        const list = active.get(note);
-        if (list && list.length) {
-          const start = list.shift();
-          trackNotes.push({ tick: start.tick, note, velocity: start.velocity, durationTicks: Math.max(1, tick - start.tick) });
-        }
-      }
-    }
-
-    tracks.push({ index: trackIndex, name: trackName || `Track ${trackIndex + 1}`, notes: trackNotes });
-    pos = end;
-  }
-
-  tempoChanges.sort((a,b) => a.tick - b.tick);
-  return { format: fmt.value, ticksPerBeat, tracks, tempoChanges };
-}
-
-function tickToSeconds(tick, midi) {
-  const changes = midi.tempoChanges;
-  let seconds = 0;
-  let lastTick = 0;
-  let micros = changes[0]?.micros || 500000;
-
-  for (let i = 1; i < changes.length; i++) {
-    const c = changes[i];
-    if (c.tick >= tick) break;
-    seconds += (c.tick - lastTick) * micros / 1000000 / midi.ticksPerBeat;
-    lastTick = c.tick;
-    micros = c.micros;
-  }
-  seconds += (tick - lastTick) * micros / 1000000 / midi.ticksPerBeat;
-  return seconds;
-}
-
-function chooseBpmFromMidi(midi) {
-  const micros = midi.tempoChanges[0]?.micros || 500000;
-  return Math.max(30, Math.min(300, Math.round(60000000 / micros)));
-}
-
-function fitNoteToGuitar(midiNote) {
-  const available = currentGuitar.availableNotes || [];
-
-  // Same behavior as the main Hoss MIDI Converter:
-  // keep the note's pitch class and move it by octaves until the
-  // closest real guitar sample is found.
-  if (available.includes(midiNote)) {
-    return midiNote;
-  }
-
-  let best = null;
-  let bestDistance = Infinity;
-
-  for (let octave = -8; octave <= 8; octave++) {
-    const candidate = midiNote + octave * 12;
-    if (!available.includes(candidate)) continue;
-
-    const distance = Math.abs(octave);
-    if (distance < bestDistance) {
-      best = candidate;
-      bestDistance = distance;
-    }
-  }
-
-  return best;
-}
-
-function importMidiNotes(midi, trackSelection) {
-  const selected = trackSelection === "all"
-    ? midi.tracks
-    : [midi.tracks[Number(trackSelection)]];
-
-  const stepSeconds = 60 / bpm / 4;
-  const imported = new Map();
-  let skipped = 0;
-  let shifted = 0;
-
-  // Import exactly like the main converter: remove silence before the
-  // first musical event so the editor starts at step 0.
-  const sourceEvents = [];
-
-  for (const track of selected) {
-    if (!track) continue;
-    for (const event of track.notes) {
-      const fitted = fitNoteToGuitar(event.note);
-      if (fitted === null) {
-        skipped++;
-        continue;
-      }
-
-      if (fitted !== event.note) shifted++;
-
-      sourceEvents.push({
-        event,
-        fitted,
-        seconds: tickToSeconds(event.tick, midi)
-      });
-    }
-  }
-
-  if (!sourceEvents.length) {
-    throw new Error("This MIDI contains no playable notes for the selected guitar.");
-  }
-
-  const firstSeconds = Math.min(...sourceEvents.map(item => item.seconds));
-
-  for (const item of sourceEvents) {
-    const relativeSeconds = Math.max(0, item.seconds - firstSeconds);
-    const step = Math.max(0, Math.round(relativeSeconds / stepSeconds));
-    const key = `${step}:${item.fitted}`;
-    const velocity = Math.max(1, Math.min(127, item.event.velocity || 100));
-    imported.set(key, Math.max(imported.get(key) || 0, velocity));
-  }
-
-  const maxStep = Math.max(...[...imported.keys()].map(id => Number(id.split(":")[0])));
-  while (steps <= maxStep) steps += 16;
-
-  notes = imported;
-  buildRoll();
-  autoSave();
-
-  return { skipped, shifted };
-}
-
-function loadMidiIntoEditor(file) {
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const midi = parseMidi(reader.result);
-      importedMidiTracks = [{index: "all", name: "All tracks", notes: []}, ...midi.tracks];
-      const importedBpm = chooseBpmFromMidi(midi);
-      bpm = importedBpm;
-      bpmEl.value = bpm;
-
-      midiTrackEl.innerHTML = "";
-      importedMidiTracks.forEach((track, i) => {
-        const option = document.createElement("option");
-        option.value = String(track.index);
-        option.textContent = track.index === "all"
-          ? `All tracks (${midi.tracks.length})`
-          : `${track.index + 1}: ${track.name} — ${track.notes.length} notes`;
-        midiTrackEl.appendChild(option);
-      });
-      midiTrackEl.disabled = false;
-      midiTrackEl._midi = midi;
-      midiTrackEl._selectedFileName = file.name;
-      midiTrackInfoEl.textContent = file.name;
-
-      // Match the main MIDI Converter: prefer guitar/melody tracks instead
-      // of immediately merging every track (which often includes drums).
-      let preferred = midi.tracks.findIndex(t =>
-        /nylon\s*gtr|nylon\s*guitar|guitar|gtr/i.test(t.name)
-      );
-
-      if (preferred === -1) {
-        preferred = midi.tracks.findIndex(t =>
-          /piano|strings|violin|melody|flute|lead|voice/i.test(t.name)
-        );
-      }
-
-      if (preferred === -1) {
-        preferred = midi.tracks.findIndex(t =>
-          !/drum|percussion|perc/i.test(t.name)
-        );
-      }
-
-      const selectedIndex = preferred >= 0 ? String(preferred) : "all";
-      midiTrackEl.value = selectedIndex;
-
-      const result = importMidiNotes(midi, selectedIndex);
-      const details = [];
-      if (result.shifted) details.push(`${result.shifted} octave-fitted`);
-      if (result.skipped) details.push(`${result.skipped} skipped`);
-      saveStateEl.textContent = `MIDI imported — ${file.name}${details.length ? ` (${details.join(", ")})` : ""}`;
-    } catch (err) {
-      console.error(err);
-      alert(`Could not import MIDI: ${err.message}`);
-      saveStateEl.textContent = "MIDI import failed";
-    } finally {
-      midiFileEl.value = "";
-    }
-  };
-  reader.onerror = () => alert("Could not read the MIDI file.");
-  reader.readAsArrayBuffer(file);
 }
 
 function updateCount() {
@@ -536,6 +251,143 @@ function loadAutoSave() {
   }
 }
 
+function parseHossText(text) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  let importedBpm = bpm;
+  let importedGuitar = null;
+  const events = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    // Metadata
+    if (line.startsWith("#")) {
+      const meta = line.substring(1).trim();
+
+      const bpmMatch = meta.match(/^BPM\s*=\s*(\d+(?:\.\d+)?)/i);
+      if (bpmMatch) {
+        importedBpm = Math.max(30, Math.min(300, Number(bpmMatch[1]) || bpm));
+      }
+
+      const guitarMatch = meta.match(/^GUITAR\s*=\s*(.+)$/i);
+      if (guitarMatch) {
+        importedGuitar = guitarMatch[1].trim();
+      }
+
+      continue;
+    }
+
+    const parts = line.split("|");
+    if (parts.length < 2) continue;
+
+    const time = Number(parts[0].trim());
+    const noteText = parts.slice(1).join("|").trim();
+
+    if (!Number.isFinite(time) || time < 0 || !noteText) continue;
+
+    const noteNames = noteText
+      .split(/[+,;\s]+/)
+      .map(n => n.trim())
+      .filter(Boolean);
+
+    if (!noteNames.length) continue;
+
+    const validNotes = [];
+    for (const noteName of noteNames) {
+      const match = noteName.match(/^([A-Ga-g])(#)?(-?\d+)$/);
+      if (!match) continue;
+
+      const letter = match[1].toUpperCase();
+      const sharp = match[2] ? "#" : "";
+      const octave = Number(match[3]);
+      const normalized = `${letter}${sharp}${octave}`;
+
+      const pitchClass = NOTE_NAMES.indexOf(`${letter}${sharp}`);
+      if (pitchClass < 0) continue;
+
+      const midi = (octave + 1) * 12 + pitchClass;
+
+      // Only cells that have a real sample on the selected guitar.
+      if (midi >= currentGuitar.low && midi <= currentGuitar.high) {
+        validNotes.push(midi);
+      }
+    }
+
+    if (validNotes.length) {
+      events.push({
+        time,
+        pitches: [...new Set(validNotes)]
+      });
+    }
+  }
+
+  return { importedBpm, importedGuitar, events };
+}
+
+function importHossText() {
+  const text = $("hossTextInput").value.trim();
+
+  if (!text) {
+    saveStateEl.textContent = "Paste Hoss text first";
+    return;
+  }
+
+  try {
+    const parsed = parseHossText(text);
+
+    if (!parsed.events.length) {
+      throw new Error("No valid guitar notes were found.");
+    }
+
+    // Use the BPM from the converter output.
+    bpm = parsed.importedBpm;
+    bpmEl.value = bpm;
+
+    // Convert milliseconds into the editor's 16th-note grid.
+    const stepMs = 60000 / bpm / 4;
+
+    notes.clear();
+
+    let maxStep = 0;
+    for (const event of parsed.events) {
+      const step = Math.max(0, Math.round(event.time / stepMs));
+
+      for (const pitch of event.pitches) {
+        notes.set(`${step}:${pitch}`, 100);
+      }
+
+      if (step > maxStep) maxStep = step;
+    }
+
+    // Give the imported song enough horizontal space.
+    // Keep the grid in 16-step blocks.
+    steps = Math.max(16, Math.ceil((maxStep + 1) / 16) * 16);
+
+    // Allow long songs while keeping the normal zoom controls useful.
+    steps = Math.min(256, steps);
+
+    buildRoll();
+    autoSave();
+
+    $("hossPastePanel").classList.add("hidden");
+    saveStateEl.textContent =
+      `Imported ${notes.size} notes from Hoss text ✓`;
+  } catch (err) {
+    console.error(err);
+    saveStateEl.textContent = `Import error: ${err.message}`;
+  }
+}
+
+function openHossPaste() {
+  $("hossPastePanel").classList.remove("hidden");
+  $("hossTextInput").focus();
+}
+
+function closeHossPaste() {
+  $("hossPastePanel").classList.add("hidden");
+}
+
 function exportProject() {
   const data = {
     type: "HOSS_GUITAR_PROJECT",
@@ -722,29 +574,10 @@ $("projectFile").onchange = async e => {
 
 $("export").onclick = exportMidi;
 $("copyHoss").onclick = copyHossText;
+$("pasteHoss").onclick = openHossPaste;
+$("importHoss").onclick = importHossText;
+$("cancelHoss").onclick = closeHossPaste;
 $("downloadHoss").onclick = downloadHossText;
-
-$("loadMidi").onclick = () => midiFileEl.click();
-midiFileEl.onchange = e => {
-  const file = e.target.files[0];
-  if (file) loadMidiIntoEditor(file);
-};
-
-midiTrackEl.onchange = () => {
-  const midi = midiTrackEl._midi;
-  if (!midi) return;
-  try {
-    const result = importMidiNotes(midi, midiTrackEl.value);
-    const details = [];
-    if (result.shifted) details.push(`${result.shifted} octave-fitted`);
-    if (result.skipped) details.push(`${result.skipped} skipped`);
-    saveStateEl.textContent = details.length
-      ? `Track loaded — ${details.join(", ")}`
-      : "Track loaded ✓";
-  } catch (err) {
-    alert(err.message);
-  }
-};
 
 bpmEl.onchange = () => {
   bpm = Math.max(30, Math.min(300, Number(bpmEl.value) || 120));
@@ -753,7 +586,7 @@ bpmEl.onchange = () => {
 };
 
 $("zoomIn").onclick = () => {
-  if (steps < 64) steps += 16;
+  if (steps < 256) steps += 16;
   buildRoll();
   autoSave();
 };

@@ -44,3 +44,32 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .muted{color:var(--muted)}
 .help li{margin:7px 0}
 @media(max-width:700px){.info-row{grid-template-columns:repeat(2,1fr)}.piano-head{align-items:flex-start;flex-direction:column}}
+
+.hidden { display: none !important; }
+.paste-panel { margin-top: 0; }
+.paste-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 15px;
+  margin-bottom: 12px;
+}
+.paste-head small {
+  display: block;
+  color: var(--muted);
+  margin-top: 4px;
+}
+#hossTextInput {
+  width: 100%;
+  min-height: 230px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  line-height: 1.5;
+}
+.paste-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
