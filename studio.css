@@ -118,3 +118,9 @@ button:disabled{opacity:.4;cursor:not-allowed}
   font-variant-numeric:tabular-nums;
   opacity:.75;
 }
+
+.roll-wrap{overflow-x:auto!important;overflow-y:auto!important;}
+
+.zoom{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.zoom button{min-width:32px;padding:7px 11px}
+#zoomValue{min-width:52px;text-align:center;font-variant-numeric:tabular-nums}

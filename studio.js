@@ -45,7 +45,7 @@ function updateCount() {
 function buildRoll() {
   keysEl.innerHTML = "";
   rollEl.innerHTML = "";
-  rollEl.style.gridTemplateColumns = `repeat(${steps}, 64px)`;
+  rollEl.style.gridTemplateColumns = `repeat(${steps}, ${Math.round(64 * hossZoom)}px)`;
 
   for (let pitch = currentGuitar.high; pitch >= currentGuitar.low; pitch--) {
     const key = document.createElement("div");
@@ -300,11 +300,11 @@ function hossPauseResume() {
   const btn = document.getElementById("pause");
 
   if (playing) {
-    // Capture the current position from the same clock used by the working
-    // playback engine.
-    const now = audioContext ? audioContext.currentTime : 0;
+    // playStart is performance.now(), so calculate the elapsed time using
+    // performance.now() too. The previous version mixed it with
+    // AudioContext.currentTime, which are different clocks.
     const elapsedMs = playStart
-      ? Math.max(0, (now - playStart) * 1000)
+      ? Math.max(0, performance.now() - playStart)
       : 0;
 
     playPositionMs = Math.max(
@@ -331,24 +331,29 @@ function hossPauseResume() {
     return;
   }
 
-  // Resume from the current position.
+  // Resume from the exact paused position.
   if (btn) btn.textContent = "⏸ Pause";
-  playSong();
+  playSong(playPositionMs);
 }
 
-async function playSong() {
+async function playSong(startPositionMs = 0) {
   if (playing || notes.size === 0) return;
 
   try {
+    const resumeFrom = Math.max(
+      0,
+      Math.min(songDurationMs(), Number(startPositionMs) || 0)
+    );
+
     playing = true;
     saveStateEl.textContent = "Loading guitar sounds…";
 
     const ctx = await ensureAudio();
 
-    // IMPORTANT: load/decode every sample BEFORE scheduling playback.
-    // Otherwise a slow network request can make source.start() receive a
-    // start time that is already in the past, which makes playback unreliable.
-    const pitches = [...new Set([...notes.keys()].map(id => Number(id.split(":")[1])))];
+    const pitches = [...new Set(
+      [...notes.keys()].map(id => Number(id.split(":")[1]))
+    )];
+
     await Promise.all(pitches.map(async pitch => {
       try {
         await getBuffer(pitch);
@@ -360,10 +365,17 @@ async function playSong() {
     if (!playing) return;
 
     const start = ctx.currentTime + 0.12;
+
+    // Same wall-clock used by pause, so the pause position is accurate.
     playStart = performance.now();
 
+    // Schedule only notes that have not already happened.
     for (const [id, velocity] of notes) {
       const [step, pitch] = id.split(":").map(Number);
+      const noteMs = step * stepDuration() * 1000;
+
+      if (noteMs < resumeFrom) continue;
+
       const buffer = bufferCache.get(midiToName(pitch));
       if (!buffer) continue;
 
@@ -372,18 +384,31 @@ async function playSong() {
       source.buffer = buffer;
       gain.gain.value = Math.max(0.05, Math.min(1, velocity / 127));
       source.connect(gain).connect(ctx.destination);
+
       activeSources.add(source);
       source.onended = () => activeSources.delete(source);
-      source.start(start + step * stepDuration());
+
+      const delaySeconds = Math.max(0, noteMs - resumeFrom) / 1000;
+      source.start(start + delaySeconds);
     }
 
-    const duration = (steps * stepDuration() + 0.15) * 1000;
+    // Only the remaining editor timeline is timed here.
+    const remaining = Math.max(
+      0,
+      songDurationMs() - resumeFrom
+    ) + 150;
+
     playTimer = setTimeout(() => {
       playing = false;
       playTimer = null;
+      playPositionMs = songDurationMs();
       saveStateEl.textContent = "Finished — notes may still be ringing";
-    }, duration);
-    saveStateEl.textContent = "Playing";
+      const pauseBtn = document.getElementById("pause");
+      if (pauseBtn) pauseBtn.textContent = "⏸ Pause";
+    }, remaining);
+
+    saveStateEl.textContent = resumeFrom > 0 ? "Playing from pause position" : "Playing";
+    hossIndicatorStart(resumeFrom);
   } catch (err) {
     console.error(err);
     playing = false;
@@ -397,16 +422,17 @@ function stopSong() {
   if (playTimer) clearTimeout(playTimer);
   playTimer = null;
 
-  // Cancel every note that is currently playing or scheduled.
   for (const source of activeSources) {
-    try {
-      source.stop();
-    } catch (e) {
-      // Source may already have ended.
-    }
+    try { source.stop(); } catch (e) {}
   }
   activeSources.clear();
 
+  playPositionMs = 0;
+
+  const pauseBtn = document.getElementById("pause");
+  if (pauseBtn) pauseBtn.textContent = "⏸ Pause";
+
+  hossIndicatorStop("Stopped", 0);
   saveStateEl.textContent = "Saved";
 }
 
@@ -772,16 +798,6 @@ bpmEl.onchange = () => {
   autoSave();
 };
 
-$("zoomIn").onclick = () => {
-  if (steps < 256) steps += 16;
-  buildRoll();
-  autoSave();
-};
-$("zoomOut").onclick = () => {
-  if (steps > 16) steps -= 16;
-  buildRoll();
-  autoSave();
-};
 
 guitarEl.onchange = () => {
   currentGuitar = GUITARS[guitarEl.value];
@@ -805,10 +821,9 @@ let hossIndicatorWatcher = null;
 let hossLastPlaying = false;
 
 function hossWatchPlayback() {
-  if (playing && !hossLastPlaying) {
-    hossIndicatorStart(0);
-  } else if (!playing && hossLastPlaying) {
-    hossIndicatorStop("Stopped", 0);
+  if (!playing && hossLastPlaying) {
+    // The audio engine stopped externally.
+    hossIndicatorStop("Stopped", playPositionMs);
   }
   hossLastPlaying = playing;
   hossIndicatorWatcher = requestAnimationFrame(hossWatchPlayback);
@@ -820,21 +835,21 @@ $("pause").onclick = hossPauseResume;
 
 
 let hossZoom = 1;
+const HOSS_BASE_CELL_WIDTH = 64;
 
 function hossApplyZoom() {
   const roll = document.getElementById("roll");
   if (!roll) return;
 
-  const width = Math.round(64 * hossZoom);
+  const width = Math.round(HOSS_BASE_CELL_WIDTH * hossZoom);
   roll.style.gridTemplateColumns = `repeat(${steps}, ${width}px)`;
 
-  // Each generated cell uses the CSS/grid column width automatically.
   document.querySelectorAll("#roll .cell").forEach(cell => {
     cell.style.width = `${width}px`;
     cell.style.minWidth = `${width}px`;
   });
 
-  const label = document.getElementById("zoomLabel");
+  const label = document.getElementById("zoomValue");
   if (label) label.textContent = `${Math.round(hossZoom * 100)}%`;
 }
 
@@ -851,11 +866,8 @@ function hossZoomOut() {
   hossSetZoom(hossZoom - 0.15);
 }
 
-
-setTimeout(() => {
-  const zi = document.getElementById("zoomIn");
-  const zo = document.getElementById("zoomOut");
-  if (zi) zi.onclick = hossZoomIn;
-  if (zo) zo.onclick = hossZoomOut;
-  hossApplyZoom();
-}, 0);
+const zoomInBtn = document.getElementById("zoomIn");
+const zoomOutBtn = document.getElementById("zoomOut");
+if (zoomInBtn) zoomInBtn.onclick = hossZoomIn;
+if (zoomOutBtn) zoomOutBtn.onclick = hossZoomOut;
+hossApplyZoom();
