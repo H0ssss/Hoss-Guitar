@@ -205,3 +205,13 @@ button:disabled{opacity:.4;cursor:not-allowed}
   pointer-events: auto;
   cursor: ew-resize;
 }
+
+/* Dynamic timeline */
+.roll-wrap {
+  overflow-x: auto !important;
+  overflow-y: auto !important;
+}
+.roll {
+  width: max-content;
+  min-width: 100%;
+}

@@ -25,6 +25,56 @@ let hossZoomX = 1;
 let hossZoomY = 1;
 const HOSS_BASE_CELL_WIDTH = 64;
 const HOSS_BASE_ROW_HEIGHT = 28;
+const HOSS_TIMELINE_CHUNK = 32;
+const HOSS_TIMELINE_BUFFER = 8;
+
+function getLastNoteStep() {
+  let last = -1;
+  for (const id of notes.keys()) {
+    const step = Number(id.split(":")[0]);
+    if (Number.isFinite(step) && step > last) last = step;
+  }
+  return last;
+}
+
+function ensureTimelineCapacity(step) {
+  if (step < steps - HOSS_TIMELINE_BUFFER) return;
+
+  const wrap = document.querySelector(".roll-wrap");
+  const left = wrap ? wrap.scrollLeft : 0;
+  const top = wrap ? wrap.scrollTop : 0;
+
+  const needed = step + HOSS_TIMELINE_BUFFER + 1;
+  while (steps < needed) steps += HOSS_TIMELINE_CHUNK;
+
+  buildRoll();
+
+  if (wrap) {
+    wrap.scrollLeft = left;
+    wrap.scrollTop = top;
+  }
+  autoSave();
+}
+
+function ensureTimelineForScroll() {
+  const wrap = document.querySelector(".roll-wrap");
+  if (!wrap) return;
+
+  const nearEnd =
+    wrap.scrollLeft + wrap.clientWidth >=
+    wrap.scrollWidth - Math.max(300, wrap.clientWidth * 0.6);
+
+  if (nearEnd) {
+    const left = wrap.scrollLeft;
+    const top = wrap.scrollTop;
+    steps += HOSS_TIMELINE_CHUNK;
+    buildRoll();
+    wrap.scrollLeft = left;
+    wrap.scrollTop = top;
+  }
+}
+
+
 
 const activeSources = new Set();
 
@@ -94,6 +144,10 @@ function buildRoll() {
         }
         updateCount();
         autoSave();
+
+        if (notes.has(id)) {
+          ensureTimelineCapacity(step);
+        }
       });
 
       rollEl.appendChild(cell);
@@ -104,9 +158,22 @@ function buildRoll() {
 }
 
 function songDurationMs() {
-  // The editor timeline is one step per grid cell.
-  // Keep a small tail after the last cell so the last note can ring.
-  return Math.max(0, steps * stepDuration() * 1000);
+  const lastStep = getLastNoteStep();
+
+  if (lastStep < 0) {
+    return Math.max(1, stepDuration() * 1000);
+  }
+
+  const lastStart = lastStep * stepDuration() * 1000;
+  let longestSample = 0;
+
+  for (const buffer of bufferCache.values()) {
+    if (buffer && Number.isFinite(buffer.duration)) {
+      longestSample = Math.max(longestSample, buffer.duration * 1000);
+    }
+  }
+
+  return lastStart + Math.max(longestSample, stepDuration() * 1000);
 }
 
 async function ensureAudio() {
@@ -349,8 +416,8 @@ function hossIndicatorStart(startMs = 0) {
 }
 
 function hossIndicatorStop(state = "Stopped", ms = 0) {
-  const pauseBtn = document.getElementById("pause");
-  if (pauseBtn) pauseBtn.textContent = "⏸ Pause";
+  // IMPORTANT: this is a visual function only. It must NOT change the
+  // Pause/Resume button because it is also called when intentionally pausing.
   cancelAnimationFrame(hossIndicatorFrame);
   hossIndicatorFrame = null;
 
@@ -379,6 +446,7 @@ function hossPauseResume() {
 
     playPositionMs = Math.max(0, Math.min(songDurationMs(), elapsedMs));
     playing = false;
+    hossPaused = true;
 
     if (playTimer) {
       clearTimeout(playTimer);
@@ -390,29 +458,27 @@ function hossPauseResume() {
     }
     activeSources.clear();
 
-    // Explicitly switch the actual button to Resume.
+    hossIndicatorStop("Paused", playPositionMs);
+
+    // Set Resume LAST. The indicator function is now side-effect free,
+    // so this label cannot be overwritten.
     if (btn) {
       btn.textContent = "▶ Resume";
       btn.setAttribute("aria-label", "Resume");
     }
 
-    hossIndicatorStop("Paused", playPositionMs);
     saveStateEl.textContent = `Paused at ${hossFmt(playPositionMs)}`;
     return;
   }
 
-  // Resume from the frozen position.
+  hossPaused = false;
+
   if (btn) {
     btn.textContent = "⏳ Loading…";
     btn.setAttribute("aria-label", "Resume loading");
   }
 
-  try {
-    playSong(playPositionMs);
-  } catch (e) {
-    if (btn) btn.textContent = "▶ Resume";
-    throw e;
-  }
+  playSong(playPositionMs);
 }
 
 async function playSong(startPositionMs = 0) {
@@ -425,6 +491,7 @@ async function playSong(startPositionMs = 0) {
     );
 
     playing = true;
+    hossPaused = false;
 
     const pauseBtn = document.getElementById("pause");
     if (pauseBtn) {
@@ -508,6 +575,7 @@ async function playSong(startPositionMs = 0) {
 
 function stopSong() {
   playing = false;
+  hossPaused = false;
 
   if (playTimer) clearTimeout(playTimer);
   playTimer = null;
@@ -898,6 +966,17 @@ guitarEl.onchange = () => {
   autoSave();
 };
 
+
+let hossRollDynamicScrollBound = false;
+
+function bindDynamicTimelineScroll() {
+  const wrap = document.querySelector(".roll-wrap");
+  if (!wrap || hossRollDynamicScrollBound) return;
+
+  hossRollDynamicScrollBound = true;
+  wrap.addEventListener("scroll", ensureTimelineForScroll, { passive: true });
+}
+
 currentGuitar.availableNotes = [];
 for (let p = currentGuitar.low; p <= currentGuitar.high; p++) {
   // MDMAG has every chromatic note E1-C5 except the range starts at E1.
@@ -907,18 +986,15 @@ for (let p = currentGuitar.low; p <= currentGuitar.high; p++) {
 buildRoll();
 loadAutoSave();
 
+bindDynamicTimelineScroll();
+
 // Start the visual indicator when the existing audio engine enters Playing.
 let hossIndicatorWatcher = null;
 let hossLastPlaying = false;
+let hossPaused = false;
 
 function hossWatchPlayback() {
-  if (!playing && hossLastPlaying) {
-    // Don't overwrite an intentional Pause/Stop UI update.
-    if (!document.getElementById("pause") ||
-        document.getElementById("pause").textContent !== "▶ Resume") {
-      hossIndicatorStop("Stopped", playPositionMs);
-    }
-  }
+  // This watcher is visual only. Never modify the Pause/Resume button here.
   hossLastPlaying = playing;
   hossIndicatorWatcher = requestAnimationFrame(hossWatchPlayback);
 }
@@ -1068,3 +1144,11 @@ window.addEventListener("load", () => {
 });
 
 window.addEventListener("load", hossResetPauseButton);
+
+window.addEventListener("load", () => {
+  const btn = document.getElementById("pause");
+  if (btn && !playing && !hossPaused) {
+    btn.textContent = "⏸ Pause";
+    btn.setAttribute("aria-label", "Pause");
+  }
+});
