@@ -177,6 +177,33 @@ function chooseBpmFromMidi(midi) {
   return Math.max(30, Math.min(300, Math.round(60000000 / micros)));
 }
 
+function fitNoteToGuitar(midiNote) {
+  const available = currentGuitar.availableNotes || [];
+
+  // Same behavior as the main Hoss MIDI Converter:
+  // keep the note's pitch class and move it by octaves until the
+  // closest real guitar sample is found.
+  if (available.includes(midiNote)) {
+    return midiNote;
+  }
+
+  let best = null;
+  let bestDistance = Infinity;
+
+  for (let octave = -8; octave <= 8; octave++) {
+    const candidate = midiNote + octave * 12;
+    if (!available.includes(candidate)) continue;
+
+    const distance = Math.abs(octave);
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+
+  return best;
+}
+
 function importMidiNotes(midi, trackSelection) {
   const selected = trackSelection === "all"
     ? midi.tracks
@@ -185,32 +212,53 @@ function importMidiNotes(midi, trackSelection) {
   const stepSeconds = 60 / bpm / 4;
   const imported = new Map();
   let skipped = 0;
+  let shifted = 0;
+
+  // Import exactly like the main converter: remove silence before the
+  // first musical event so the editor starts at step 0.
+  const sourceEvents = [];
 
   for (const track of selected) {
     if (!track) continue;
     for (const event of track.notes) {
-      if (event.note < currentGuitar.low || event.note > currentGuitar.high) {
+      const fitted = fitNoteToGuitar(event.note);
+      if (fitted === null) {
         skipped++;
         continue;
       }
-      const seconds = tickToSeconds(event.tick, midi);
-      const step = Math.max(0, Math.round(seconds / stepSeconds));
-      const key = `${step}:${event.note}`;
-      const velocity = Math.max(1, Math.min(127, event.velocity));
-      imported.set(key, Math.max(imported.get(key) || 0, velocity));
+
+      if (fitted !== event.note) shifted++;
+
+      sourceEvents.push({
+        event,
+        fitted,
+        seconds: tickToSeconds(event.tick, midi)
+      });
     }
   }
 
-  if (!imported.size) {
-    throw new Error("No notes from that MIDI fit the selected guitar range (E1–C5).");
+  if (!sourceEvents.length) {
+    throw new Error("This MIDI contains no playable notes for the selected guitar.");
+  }
+
+  const firstSeconds = Math.min(...sourceEvents.map(item => item.seconds));
+
+  for (const item of sourceEvents) {
+    const relativeSeconds = Math.max(0, item.seconds - firstSeconds);
+    const step = Math.max(0, Math.round(relativeSeconds / stepSeconds));
+    const key = `${step}:${item.fitted}`;
+    const velocity = Math.max(1, Math.min(127, item.event.velocity || 100));
+    imported.set(key, Math.max(imported.get(key) || 0, velocity));
   }
 
   const maxStep = Math.max(...[...imported.keys()].map(id => Number(id.split(":")[0])));
   while (steps <= maxStep) steps += 16;
+
   notes = imported;
   buildRoll();
   autoSave();
-  return skipped;
+
+  return { skipped, shifted };
 }
 
 function loadMidiIntoEditor(file) {
@@ -237,8 +285,32 @@ function loadMidiIntoEditor(file) {
       midiTrackEl._selectedFileName = file.name;
       midiTrackInfoEl.textContent = file.name;
 
-      importMidiNotes(midi, "all");
-      saveStateEl.textContent = `MIDI imported — ${file.name}`;
+      // Match the main MIDI Converter: prefer guitar/melody tracks instead
+      // of immediately merging every track (which often includes drums).
+      let preferred = midi.tracks.findIndex(t =>
+        /nylon\s*gtr|nylon\s*guitar|guitar|gtr/i.test(t.name)
+      );
+
+      if (preferred === -1) {
+        preferred = midi.tracks.findIndex(t =>
+          /piano|strings|violin|melody|flute|lead|voice/i.test(t.name)
+        );
+      }
+
+      if (preferred === -1) {
+        preferred = midi.tracks.findIndex(t =>
+          !/drum|percussion|perc/i.test(t.name)
+        );
+      }
+
+      const selectedIndex = preferred >= 0 ? String(preferred) : "all";
+      midiTrackEl.value = selectedIndex;
+
+      const result = importMidiNotes(midi, selectedIndex);
+      const details = [];
+      if (result.shifted) details.push(`${result.shifted} octave-fitted`);
+      if (result.skipped) details.push(`${result.skipped} skipped`);
+      saveStateEl.textContent = `MIDI imported — ${file.name}${details.length ? ` (${details.join(", ")})` : ""}`;
     } catch (err) {
       console.error(err);
       alert(`Could not import MIDI: ${err.message}`);
@@ -662,9 +734,12 @@ midiTrackEl.onchange = () => {
   const midi = midiTrackEl._midi;
   if (!midi) return;
   try {
-    const skipped = importMidiNotes(midi, midiTrackEl.value);
-    saveStateEl.textContent = skipped
-      ? `Track loaded — ${skipped} out-of-range notes skipped`
+    const result = importMidiNotes(midi, midiTrackEl.value);
+    const details = [];
+    if (result.shifted) details.push(`${result.shifted} octave-fitted`);
+    if (result.skipped) details.push(`${result.skipped} skipped`);
+    saveStateEl.textContent = details.length
+      ? `Track loaded — ${details.join(", ")}`
       : "Track loaded ✓";
   } catch (err) {
     alert(err.message);
