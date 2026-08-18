@@ -88,12 +88,33 @@ button:disabled{opacity:.4;cursor:not-allowed}
 
 .roll-wrap{
   overflow-x:auto;
-  overflow-y:hidden;
+  overflow-y:auto;
   position:relative;
+  max-height:70vh;
 }
 #roll{
   min-width:max-content;
 }
 #pause{
   min-width:96px;
+}
+
+.zoom-controls{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  margin-left:10px;
+}
+.zoom-btn{
+  min-width:30px;
+  height:30px;
+  padding:0 8px;
+  font-size:18px;
+  line-height:1;
+}
+#zoomLabel{
+  min-width:48px;
+  text-align:center;
+  font-variant-numeric:tabular-nums;
+  opacity:.75;
 }

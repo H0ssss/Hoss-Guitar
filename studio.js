@@ -297,35 +297,43 @@ function hossIndicatorStop(state = "Stopped", ms = 0) {
 
 
 function hossPauseResume() {
+  const btn = document.getElementById("pause");
+
   if (playing) {
-    // Freeze the current audio position and stop currently playing sources.
+    // Capture the current position from the same clock used by the working
+    // playback engine.
     const now = audioContext ? audioContext.currentTime : 0;
     const elapsedMs = playStart
       ? Math.max(0, (now - playStart) * 1000)
       : 0;
 
-    playPositionMs = Math.max(0, Math.min(songDurationMs(), elapsedMs));
+    playPositionMs = Math.max(
+      0,
+      Math.min(songDurationMs(), elapsedMs)
+    );
+
     playing = false;
 
-    if (playTimer) clearTimeout(playTimer);
-    playTimer = null;
+    if (playTimer) {
+      clearTimeout(playTimer);
+      playTimer = null;
+    }
 
     for (const source of activeSources) {
       try { source.stop(); } catch (e) {}
     }
     activeSources.clear();
 
-    const btn = document.getElementById("pause");
     if (btn) btn.textContent = "▶ Resume";
+
     hossIndicatorStop("Paused", playPositionMs);
     saveStateEl.textContent = "Paused";
-  } else {
-    const btn = document.getElementById("pause");
-    if (btn) btn.textContent = "⏸ Pause";
-
-    // Resume from the current editor position.
-    playSong();
+    return;
   }
+
+  // Resume from the current position.
+  if (btn) btn.textContent = "⏸ Pause";
+  playSong();
 }
 
 async function playSong() {
@@ -809,3 +817,45 @@ function hossWatchPlayback() {
 requestAnimationFrame(hossWatchPlayback);
 
 $("pause").onclick = hossPauseResume;
+
+
+let hossZoom = 1;
+
+function hossApplyZoom() {
+  const roll = document.getElementById("roll");
+  if (!roll) return;
+
+  const width = Math.round(64 * hossZoom);
+  roll.style.gridTemplateColumns = `repeat(${steps}, ${width}px)`;
+
+  // Each generated cell uses the CSS/grid column width automatically.
+  document.querySelectorAll("#roll .cell").forEach(cell => {
+    cell.style.width = `${width}px`;
+    cell.style.minWidth = `${width}px`;
+  });
+
+  const label = document.getElementById("zoomLabel");
+  if (label) label.textContent = `${Math.round(hossZoom * 100)}%`;
+}
+
+function hossSetZoom(value) {
+  hossZoom = Math.max(0.35, Math.min(2.5, value));
+  hossApplyZoom();
+}
+
+function hossZoomIn() {
+  hossSetZoom(hossZoom + 0.15);
+}
+
+function hossZoomOut() {
+  hossSetZoom(hossZoom - 0.15);
+}
+
+
+setTimeout(() => {
+  const zi = document.getElementById("zoomIn");
+  const zo = document.getElementById("zoomOut");
+  if (zi) zi.onclick = hossZoomIn;
+  if (zo) zo.onclick = hossZoomOut;
+  hossApplyZoom();
+}, 0);
