@@ -4,10 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hoss Guitar Music Studio</title>
-<link
-    rel="icon"
-    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎹</text></svg>"
->
 <link rel="stylesheet" href="studio.css">
 </head>
 <body>
@@ -15,6 +11,7 @@
   <nav class="site-nav">
     <a href="index.html">MIDI Converter</a>
     <a href="studio.html" class="active">🎹 Music Studio</a>
+    <a href="library.html">🎵 Library</a>
   </nav>
 
   <header>
@@ -35,7 +32,6 @@
       <input id="bpm" type="number" min="30" max="300" value="120">
     </div>
     <button id="play">▶ Play</button>
-    <button id="pause" class="secondary">⏸ Pause</button>
     <button id="stop" class="secondary">■ Stop</button>
     <button id="clear" class="secondary">Clear</button>
     <button id="export" class="secondary">Export MIDI</button>
@@ -82,33 +78,21 @@
     <div><span>Autosave</span><b id="saveState">Ready</b></div>
   </section>
 
-  <section class="card playback-card">
-    <div class="playback-left">
-      <span class="playback-dot" id="playbackDot"></span>
-      <span id="playbackState">Ready</span>
-    </div>
-    <div class="playback-next">
-      <span>Next</span>
-      <strong id="nextNote">—</strong>
-    </div>
-    <div class="playback-time" id="playbackTime">0:00 / 0:00</div>
-  </section>
-
   <section class="card piano-card">
     <div class="piano-head">
       <div>
         <strong>Piano Roll</strong>
-        <small>Click cells to add/remove notes. Drag vertically across the grid for chords. The timeline expands automatically as you create longer songs.</small>
+        <small>Click cells to add/remove notes. Drag vertically across the grid for chords.</small>
       </div>
       <div class="zoom">
         <button id="zoomOut" class="secondary">−</button>
-        <span id="zoomValue">100% × 100%</span>
+        <span id="zoomValue">16 steps</span>
         <button id="zoomIn" class="secondary">+</button>
       </div>
     </div>
     <div class="roll-wrap">
       <div class="keys" id="keys"></div>
-      <div class="roll" id="roll"><div id="playhead" class="playhead"></div></div>
+      <div class="roll" id="roll"></div>
     </div>
   </section>
 
@@ -117,7 +101,7 @@
     <ol>
       <li>Choose your guitar.</li>
       <li>Paste Hoss text from the MIDI Converter to load an existing song.</li>
-      <li>Click a grid cell to place a note. More cells are added automatically when you reach the end.</li>
+      <li>Click a grid cell to place a note.</li>
       <li>Press Play to hear the selected guitar samples.</li>
       <li>Change BPM and build chords by placing notes on the same step.</li>
       <li>Your project is automatically saved in this browser.</li>
