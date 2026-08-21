@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HOSS Music Library</title>
+  <link rel="stylesheet" href="library.css">
+</head>
+<body>
+<main class="wrap">
+  <nav class="site-nav">
+    <a href="index.html">MIDI Converter</a>
+    <a href="studio.html">🎹 Music Studio</a>
+    <a href="library.html" class="active">🎵 Library</a>
+  </nav>
+
+  <header>
+    <div class="logo">🎸 Hoss Guitars</div>
+    <h1>HOSS Music Library</h1>
+    <p>Share HOSS guitar songs with everyone. TXT files only.</p>
+  </header>
+
+  <section class="card upload-card">
+    <div>
+      <strong>📤 Upload a HOSS song</strong>
+      <p class="muted">Choose a .txt HOSS Guitar song. The file name becomes the song title.</p>
+    </div>
+    <label class="upload-button">
+      Choose TXT file
+      <input id="songFile" type="file" accept=".txt,text/plain">
+    </label>
+    <div id="uploadStatus" class="status"></div>
+  </section>
+
+  <section class="card controls">
+    <div class="search-wrap">
+      <label for="search">Search</label>
+      <input id="search" type="search" placeholder="Search songs...">
+    </div>
+
+    <div class="sort-wrap">
+      <label for="sort">Sort</label>
+      <select id="sort">
+        <option value="newest">Newest</option>
+        <option value="oldest">Oldest</option>
+        <option value="az">A–Z</option>
+        <option value="za">Z–A</option>
+      </select>
+    </div>
+  </section>
+
+  <section class="card letters-card">
+    <div id="letters" class="letters"></div>
+  </section>
+
+  <section id="library" class="library"></section>
+
+  <div id="empty" class="card empty hidden">
+    <strong>No songs found.</strong>
+    <p class="muted">Try another search or upload the first song.</p>
+  </div>
+
+  <div id="error" class="card error hidden"></div>
+</main>
+
+<script src="supabase-config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="library.js"></script>
+</body>
+</html>
