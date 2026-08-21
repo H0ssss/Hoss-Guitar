@@ -74,8 +74,10 @@
   }
 
   function setVote(songId, value) {
-    try { localStorage.setItem(voteKey(songId), value); }
-    catch {}
+    try {
+      if (value) localStorage.setItem(voteKey(songId), value);
+      else localStorage.removeItem(voteKey(songId));
+    } catch {}
   }
 
   function formatDate(value) {
@@ -158,7 +160,7 @@
             <button class="secondary ${vote === "dislike" ? "voted" : ""}" data-action="dislike" data-id="${song.id}">
               👎 <span class="vote-count">${song.dislikes}</span>
             </button>
-            <button class="secondary" data-action="open" data-id="${song.id}">🎹 Open in Studio</button>
+            <button class="secondary" data-action="copy" data-id="${song.id}">📋 Copy Text</button>
             <button data-action="download" data-id="${song.id}">📥 Download</button>
           </div>
         </article>
@@ -246,11 +248,33 @@
   }
 
   async function vote(songId, type) {
-    // One vote per song per browser.
-    if (getVote(songId)) return;
+    const existing = getVote(songId);
+
+    // If the same button is clicked again, remove that vote.
+    if (existing === type) {
+      const fn = type === "like" ? "hoss_unlike_song" : "hoss_undislike_song";
+      const { data, error } = await supabaseClient.rpc(fn, { song_id: songId });
+
+      if (error) {
+        showError(`Vote failed: ${error.message}`);
+        return;
+      }
+
+      const song = songs.find(s => s.id === songId);
+      if (!song) return;
+
+      if (type === "like") song.likes = Number(data);
+      else song.dislikes = Number(data);
+
+      setVote(songId, "");
+      renderSongs();
+      return;
+    }
+
+    // Keep one active vote per song per browser.
+    if (existing) return;
 
     const fn = type === "like" ? "hoss_like_song" : "hoss_dislike_song";
-
     const { data, error } = await supabaseClient.rpc(fn, { song_id: songId });
 
     if (error) {
@@ -268,16 +292,22 @@
     renderSongs();
   }
 
-  function openInStudio(songId) {
+  async function copySongText(songId) {
     const song = songs.find(s => s.id === songId);
     if (!song) return;
 
-    localStorage.setItem("hoss-guitar-library-import", JSON.stringify({
-      title: song.title,
-      text: song.content
-    }));
-
-    location.href = "studio.html";
+    try {
+      await navigator.clipboard.writeText(song.content);
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = song.content;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
   }
 
   function downloadSong(songId) {
@@ -296,8 +326,8 @@
   async function handleSongAction(action, id) {
     if (action === "like" || action === "dislike") {
       await vote(id, action);
-    } else if (action === "open") {
-      openInStudio(id);
+    } else if (action === "copy") {
+      await copySongText(id);
     } else if (action === "download") {
       downloadSong(id);
     }
