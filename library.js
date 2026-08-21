@@ -28,24 +28,36 @@
       .replaceAll("'", "&#039;");
   }
 
+  // Validates the REAL HOSS format used by your Studio.
+  // Example:
+  // # SONG NAME
+  // # BPM=64.000
+  // # GUITAR=Serenelle
+  // # FORMAT: time_ms|notes
+  // 0|A3+A4
   function isValidHossText(text) {
     const clean = text.replace(/\r/g, "").trim();
     if (!clean) return false;
 
     const lines = clean.split("\n").map(x => x.trim()).filter(Boolean);
-    const hasHeader = lines.some(x => /^#\s*HOSS\s+GUITAR\s+SONG\b/i.test(x));
-    const hasFormat = lines.some(x => /^#\s*FORMAT\s*:\s*time_ms\|notes/i.test(x));
 
-    // Require the actual HOSS format and at least one valid note line.
+    const hasFormat = lines.some(x =>
+      /^#[\s]*FORMAT[\s]*:[\s]*time_ms[\s]*\|[\s]*notes/i.test(x)
+    );
+
     const hasNote = lines.some(x => {
       if (x.startsWith("#")) return false;
-      const parts = x.split("|");
-      if (parts.length < 2) return false;
-      const time = Number(parts[0].trim());
-      return Number.isFinite(time) && time >= 0 && parts.slice(1).join("|").trim().length > 0;
+
+      const separator = x.indexOf("|");
+      if (separator <= 0) return false;
+
+      const time = Number(x.slice(0, separator).trim());
+      const notes = x.slice(separator + 1).trim();
+
+      return Number.isFinite(time) && time >= 0 && notes.length > 0;
     });
 
-    return hasHeader && hasFormat && hasNote;
+    return hasFormat && hasNote;
   }
 
   function titleFromFilename(name) {
@@ -181,7 +193,7 @@
 
     if (!file) return;
 
-    if (!/\.txt$/i.test(file.name) || (file.type && file.type !== "text/plain")) {
+    if (!/\.txt$/i.test(file.name)) {
       status.textContent = "Please choose a TXT file only.";
       status.classList.add("error");
       return;
@@ -234,22 +246,20 @@
   }
 
   async function vote(songId, type) {
-    const existing = getVote(songId);
-
     // One vote per song per browser.
-    // The vote choice is stored client-side and survives refreshes.
-    if (existing) return;
-
-    const song = songs.find(s => s.id === songId);
-    if (!song) return;
+    if (getVote(songId)) return;
 
     const fn = type === "like" ? "hoss_like_song" : "hoss_dislike_song";
+
     const { data, error } = await supabaseClient.rpc(fn, { song_id: songId });
 
     if (error) {
       showError(`Vote failed: ${error.message}`);
       return;
     }
+
+    const song = songs.find(s => s.id === songId);
+    if (!song) return;
 
     if (type === "like") song.likes = Number(data);
     else song.dislikes = Number(data);
@@ -300,7 +310,7 @@
       window.HOSS_SUPABASE_URL === "YOUR_SUPABASE_URL" ||
       window.HOSS_SUPABASE_ANON_KEY === "YOUR_SUPABASE_ANON_KEY"
     ) {
-      showError("Supabase is not configured yet. Add your project URL and anon key to supabase-config.js.");
+      showError("Supabase is not configured yet.");
       renderLetters();
       renderSongs();
       return;
