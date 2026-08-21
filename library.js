@@ -64,6 +64,11 @@
     return name.replace(/\.txt$/i, "").trim();
   }
 
+  function guitarFromText(text) {
+    const match = String(text || "").match(/^#[\\s]*GUITAR[\\s]*=[\\s]*(.+)$/im);
+    return match ? match[1].trim() : "Unknown Guitar";
+  }
+
   function voteKey(songId) {
     return `hoss-library-vote:${songId}`;
   }
@@ -151,6 +156,7 @@
         <article class="song">
           <div>
             <div class="song-title">🎵 ${escapeHtml(song.title)}</div>
+            <div class="song-date">🎸 ${escapeHtml(guitarFromText(song.content))}</div>
             <div class="song-date">Added ${escapeHtml(formatDate(song.created_at))}</div>
           </div>
           <div class="song-actions">
