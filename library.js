@@ -65,7 +65,7 @@
   }
 
   function guitarFromText(text) {
-    const match = String(text || "").match(/^#[\\s]*GUITAR[\\s]*=[\\s]*(.+)$/im);
+    const match = String(text || "").replace(/\r/g, "").match(/^#[\t ]*GUITAR[\t ]*=[\t ]*(.+)$/im);
     return match ? match[1].trim() : "Unknown Guitar";
   }
 
