@@ -296,8 +296,11 @@
     const song = songs.find(s => s.id === songId);
     if (!song) return;
 
+    let copied = false;
+
     try {
       await navigator.clipboard.writeText(song.content);
+      copied = true;
     } catch {
       const area = document.createElement("textarea");
       area.value = song.content;
@@ -305,9 +308,30 @@
       area.style.opacity = "0";
       document.body.appendChild(area);
       area.select();
-      document.execCommand("copy");
+      try {
+        copied = document.execCommand("copy");
+      } catch {}
       area.remove();
     }
+
+    if (!copied) return;
+
+    const button = document.querySelector(
+      `button[data-action="copy"][data-id="${songId}"]`
+    );
+
+    if (!button) return;
+
+    const original = button.innerHTML;
+    button.innerHTML = "✅ Copied!";
+    button.classList.add("voted");
+    button.disabled = true;
+
+    setTimeout(() => {
+      button.innerHTML = original;
+      button.classList.remove("voted");
+      button.disabled = false;
+    }, 1500);
   }
 
   function downloadSong(songId) {
