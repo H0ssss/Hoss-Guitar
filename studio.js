@@ -1,7 +1,7 @@
 const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 const GUITARS = {
   mdmag: {
-    name: "MDMAG Acoustic Guitar",
+    name: "MDMAG",
     low: 28,   // E1
     high: 72,  // C5
     folder: "assets/guitars/mdmag"
